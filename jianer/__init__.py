@@ -6,12 +6,12 @@ import asyncio
 import sys
 import os
 
-HYPER_BOT_VERSION = "0.81.2"
+JIANER_BOT_VERSION = "0.81.2"
 
 # listener = None
 
 screens.play_startup()
-screens.play_info(HYPER_BOT_VERSION)
+screens.play_info(JIANER_BOT_VERSION)
 
 
 class Client:

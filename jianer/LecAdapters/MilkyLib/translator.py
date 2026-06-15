@@ -1,7 +1,7 @@
 import httpx
 import json
 
-from hyperot.network import WebsocketConnection
+from jianer.network import WebsocketConnection
 from ...common import Message
 from ...utils.logic import Matcher
 from ...adapters.obuilder import OneBotEventBuilder, OneBotJsonMessageBuilder

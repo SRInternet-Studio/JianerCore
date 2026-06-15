@@ -13,7 +13,7 @@ from ..LecAdapters.OneBotLib.Manager import reports, Packet
 from ..events import *
 from ..utils.hypetyping import Any, Union, NoReturn
 
-config = configurator.BotConfig.get("hyper-bot")
+config = configurator.BotConfig.get("jianer-bot")
 logger = hyperogger.Logger()
 logger.set_level(config.log_level)
 listener_ran = False

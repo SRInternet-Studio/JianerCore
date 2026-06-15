@@ -1,75 +1,89 @@
-![banner](./ban.png)
-
 <div align="center">
-<h1>HypeR Core</h1>
-</div>
-<p align="center">适配OneBot v11协议，目标多协议、功能模块化、易于扩展、高效的QQ机器人及框架</p>
-<div align="center">
-<img src="https://img.shields.io/badge/OneBot-11-black?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHAAAABwCAMAAADxPgR5AAAAGXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAAAxQTFRF////29vbr6+vAAAAk1hCcwAAAAR0Uk5T////AEAqqfQAAAKcSURBVHja7NrbctswDATQXfD//zlpO7FlmwAWIOnOtNaTM5JwDMa8E+PNFz7g3waJ24fviyDPgfhz8fHP39cBcBL9KoJbQUxjA2iYqHL3FAnvzhL4GtVNUcoSZe6eSHizBcK5LL7dBr2AUZlev1ARRHCljzRALIEog6H3U6bCIyqIZdAT0eBuJYaGiJaHSjmkYIZd+qSGWAQnIaz2OArVnX6vrItQvbhZJtVGB5qX9wKqCMkb9W7aexfCO/rwQRBzsDIsYx4AOz0nhAtWu7bqkEQBO0Pr+Ftjt5fFCUEbm0Sbgdu8WSgJ5NgH2iu46R/o1UcBXJsFusWF/QUaz3RwJMEgngfaGGdSxJkE/Yg4lOBryBiMwvAhZrVMUUvwqU7F05b5WLaUIN4M4hRocQQRnEedgsn7TZB3UCpRrIJwQfqvGwsg18EnI2uSVNC8t+0QmMXogvbPg/xk+Mnw/6kW/rraUlvqgmFreAA09xW5t0AFlHrQZ3CsgvZm0FbHNKyBmheBKIF2cCA8A600aHPmFtRB1XvMsJAiza7LpPog0UJwccKdzw8rdf8MyN2ePYF896LC5hTzdZqxb6VNXInaupARLDNBWgI8spq4T0Qb5H4vWfPmHo8OyB1ito+AysNNz0oglj1U955sjUN9d41LnrX2D/u7eRwxyOaOpfyevCWbTgDEoilsOnu7zsKhjRCsnD/QzhdkYLBLXjiK4f3UWmcx2M7PO21CKVTH84638NTplt6JIQH0ZwCNuiWAfvuLhdrcOYPVO9eW3A67l7hZtgaY9GZo9AFc6cryjoeFBIWeU+npnk/nLE0OxCHL1eQsc1IciehjpJv5mqCsjeopaH6r15/MrxNnVhu7tmcslay2gO2Z1QfcfX0JMACG41/u0RrI9QAAAABJRU5ErkJggg==" alt="Badge">
-<img src="https://img.shields.io/static/v1?label=LICENSE&message=GPL-3.0&color=lightrey" alt="Badge">
+<h1>JianerCore</h1>
 </div>
 
-## 概览
+<p align="center">面向 Jianer_QQ_bot 的可扩展 QQ 机器人框架</p>
 
-HypeR Core 是一个适配OneBot协议的机器人框架，旨在提供一个简洁、高效、可扩展的机器人运行结构。
+<div align="center">
+<img src="https://img.shields.io/badge/OneBot-11-black" alt="OneBot 11">
+<img src="https://img.shields.io/static/v1?label=LICENSE&message=GPL-3.0&color=lightgrey" alt="GPL-3.0">
+</div>
 
-[点我跳转详细文档 (English)](./documents/en.md)
+## 项目介绍
 
-[先前项目](https://github.com/HarcicYang/HypeR_Bot)
+JianerCore 是 [SRInternet-Studio/Jianer_QQ_bot](https://github.com/SRInternet-Studio/Jianer_QQ_bot) 使用的 QQ 机器人框架，负责连接 OneBot 实现、接收和分发事件，并向机器人业务代码提供消息发送及群管理等接口。
 
-## 使用 `hytil` 快速开始
+JianerCore 基于 HypeR Core 开发。除代码基础外，本项目是独立维护的项目，与 HypeR Core 没有其他联系。
 
----
+JianerCore 本身不负责登录 QQ。运行机器人时，还需要使用支持 OneBot v11 的实现，例如 NapCat 或 Lagrange.OneBot。
 
-### 🚧 该功能为老旧项目 HypeR Bot 设计，尚不适用于 HypeR Core，并且可能在以后被移除。
+## 主要功能
 
----
+- 通过正向 WebSocket 或 HTTP 连接 OneBot v11 实现
+- 订阅并异步处理群消息、私聊消息、通知和请求事件
+- 使用 Loguru 提供分级、彩色和异常日志
+- 发送、回复和撤回消息
+- 支持文字、图片、语音、视频、At、回复、转发和 JSON 等消息段
+- 提供禁言、踢出群成员、设置精华消息和群头衔等操作
+- 使用适配器结构隔离协议实现与机器人业务逻辑
+- 支持机器人主人、黑名单和静默名单配置
 
+## 环境要求
 
-`hytil` 于 HypeR Bot 0.81.0 版本加入，是一个支持您快速配置完整 HypeR Bot 的实用工具。
+- Python 3.9 或更高版本
+- 一个可用的 OneBot v11 实现
 
-### 安装 HypeR Bot
+本项目当前使用 Python 3.12.7 进行开发。首次配置本地开发环境：
 
-```shell
-pip install hyper_bot
+```powershell
+D:\Python3127\python.exe -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pip install -e .
 ```
 
-### 使用 `hytil`
+发行包名为 `jianer-bot`：
 
 ```shell
-$ python -m hytil
-usage: hytil.py [-h] [-v] [-i] [-p PATH]
-
-HypeR Bot Utils 版本 0.0.1
-
-options:
-  -h, --help            show this help message and exit
-  -v, --version         显示版本信息
-  -i, --install         安装完整的HypeR Bot到本地
-  -p PATH, --path PATH  指定操作路径
-
+pip install jianer-bot
 ```
 
-在开始前，确认一个空文件夹，该文件夹将用于安装 HypeR Bot。
+## 快速开始
 
-```shell
-$ mkdir bot
-$ ls
-bot ...
+`jianer-bot` 是安装和发布时使用的发行包名，Python 导入包名为 `jianer`。下面的示例会在收到群消息 `ping` 时回复 `pong`：
+
+```python
+from jianer import configurator
+from cfgr.manager import Serializers
+
+configurator.BotConfig.load_from(
+    "config.json",
+    Serializers.JSON,
+    "jianer-bot",
+)
+
+from jianer.adapters import builtins as adapters
+
+adapters.load_onebot()
+
+from jianer import Client
+from jianer.events import GroupMessageEvent
+
+
+async def handle_group_message(event, actions):
+    if str(event.message) == "ping":
+        await actions.send("pong", group_id=event.group_id)
+
+
+with Client() as client:
+    client.subscribe(handle_group_message, GroupMessageEvent)
+    client.run()
 ```
 
-现在，使用如下命令将完整的 HypeR Bot 下载到本地：
+加载配置后再加载 OneBot 适配器和事件模块。完整示例可查看 [`test.py`](./test.py)。
 
-```shell
-python -m hytil -i -p ./bot
-```
+## 配置
 
-下载完成后，您将会收到运行 `main.py` 的提示，此时，请您进入安装目录，在该目录下执行`python main.py`，配置文件 `config.json`
-将随后创建，请根据下方指引编辑配置文件。
-
-## 配置文件
-
-`config.json`:
+在项目运行目录创建 `config.json`：
 
 ```json
 {
@@ -82,44 +96,48 @@ python -m hytil -i -p ./bot
     "ob_auto_startup": false,
     "ob_exec": "./Lagrange.OneBot/Lagrange.OneBot",
     "ob_startup_path": "./Lagrange.OneBot/",
+    "ob_log_output": false,
     "host": "127.0.0.1",
-    "port": 5004
+    "port": 5004,
+    "retries": 5,
+    "token": "",
+    "auth": ""
   },
   "log_level": "INFO",
-  "log_use_nf": true,
+  "log_use_nf": false,
   "uin": 0,
   "max_workers": 25,
-  "others": {
-    ...
-  }
+  "others": {}
 }
-
 ```
 
-其中：
+主要配置项：
 
-- `owner`：机器人主人的QQ号，填写在这个列表中的QQ号所发送的消息会被标记`is_owner = True`；
-- `black_list`：黑名单，填写在这个列表中的QQ号所发送的的消息会被标记 `blocked = True`；
-- `connection`：连接信息，包括主机地址、端口以及自动启动OneBot实现的配置；
-- `log_level`：日志等级，可选值为`DEBUG`、`TRACE`、`INFO`、`WARNING`、`ERROR`、`CRITICAL`；
-- `others`：其他配置项，允许开发者自行定义；
-- `log_use_nf`：是否为日志输出启用NerdFont;
-- `protocol`：适配的协议，目前仅支持OneBot.
+- `owner`：机器人所有者的 QQ 号列表
+- `black_list`：需要标记为已屏蔽的用户或群列表
+- `silents`：需要静默处理的用户或群列表
+- `connection.mode`：连接模式，`FWS` 表示正向 WebSocket，`HTTPC` 表示 HTTP
+- `connection.host`：OneBot 服务地址
+- `connection.port`：OneBot 服务端口
+- `connection.retries`：连接失败后的最大重试次数
+- `connection.ob_auto_startup`：是否由框架启动 OneBot 实现
+- `log_level`：日志等级
 
-### 关于该项目中使用的 ucfgr / cfgr
+## 项目结构
 
-[ucfgr](https://pypi.org/project/ucfgr/) 是本人早年间开发的配置文件管理器，但是我似乎一直都忘了公开他...
+```text
+jianer/
+├── adapters/       适配器接口与加载逻辑
+├── LecAdapters/    OneBot、Milky 和 Kritor 适配代码
+├── utils/          通用工具
+├── events.py       事件定义与转换
+├── listener.py     监听器入口
+├── network.py      WebSocket 和 HTTP 连接
+└── segments.py     消息段定义
+```
 
-该项目设计为支持类型注解，允许一次读取、处处获取，并且无需多次定义就可以自由切换文件格式，支持文件自动创建。
+当前主要使用 OneBot v11 适配器。Milky 和 Kritor 相关代码仍处于开发阶段，部分功能尚未实现。
 
-目前设计支持 YAML 和 JSON 格式。
+## 许可证
 
-> The universal config file manager for python
-
-## 环境
-
-本人开发和测试均在Python 3.11.7环境进行，其他版本未经测试，理论上支持 Python 3.9 及以上版本。
-
-所需的第三方库陈列在[`requirements.txt`](/requirements.txt)中，使用`pip install -r requirements.txt`即可。
-
-[`requirements_optional.txt`](/requirements_optional.txt)中包含部分模块所需的其他依赖，可视情况安装。
+本项目采用 [GPL-3.0](./LICENSE) 许可证。

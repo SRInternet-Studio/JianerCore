@@ -5,7 +5,7 @@ from .utils.hypetyping import TypeVar
 
 from typing import Generic, Type, Self
 
-config = configurator.BotConfig.get("hyper-bot")
+config = configurator.BotConfig.get("jianer-bot")
 T = TypeVar("T")
 
 from .adapters.common import *

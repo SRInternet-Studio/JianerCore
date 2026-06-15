@@ -13,7 +13,7 @@ import asyncio
 import json
 import sys
 
-config = configurator.BotConfig.get("hyper-bot")
+config = configurator.BotConfig.get("jianer-bot")
 logger = hyperogger.Logger()
 logger.set_level(config.log_level)
 listener_ran = False

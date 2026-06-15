@@ -8,7 +8,7 @@ from .utils.errors import *
 from .utils.hypetyping import Union
 from . import configurator
 
-config = configurator.BotConfig.get("hyper-bot")
+config = configurator.BotConfig.get("jianer-bot")
 
 from .adapters.res import SegmentBase, message_types
 

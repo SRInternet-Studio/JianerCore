@@ -14,7 +14,7 @@ logger: hyperogger.Logger
 
 def init() -> None:
     global config, logger
-    config = configurator.BotConfig.get("hyper-bot")
+    config = configurator.BotConfig.get("jianer-bot")
     logger = hyperogger.Logger()
     logger.set_level(config.log_level)
 

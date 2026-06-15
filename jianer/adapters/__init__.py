@@ -11,16 +11,16 @@ def replace(new: Any, old: str):
         sys.modules[old] = new
 
 
-def replace_listener(new: "hyperot.adapters.listener"):
-    replace(new, "hyperot.adapters.listener")
+def replace_listener(new: "jianer.adapters.listener"):
+    replace(new, "jianer.adapters.listener")
 
 
-def replace_common(new: "hyperot.adapters.common"):
-    replace(new, "hyperot.adapters.common")
+def replace_common(new: "jianer.adapters.common"):
+    replace(new, "jianer.adapters.common")
 
 
-def replace_res(new: "hyperot.adapters.res"):
-    replace(new, "hyperot.adapters.res")
+def replace_res(new: "jianer.adapters.res"):
+    replace(new, "jianer.adapters.res")
 
 
 class Adapter:

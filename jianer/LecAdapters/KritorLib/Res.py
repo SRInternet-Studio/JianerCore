@@ -378,7 +378,7 @@ class SegmentBase(ABC):
 class EventService:
     def __init__(self, stub: EventServiceStub):
         self.stub = stub
-        self.uin: int = BotConfig.get("hyper-bot").uin
+        self.uin: int = BotConfig.get("jianer-bot").uin
 
     async def core_service(self) -> NoReturn:
         while 1:

@@ -1,6 +1,6 @@
 from . import configurator, events
 
-config = configurator.BotConfig.get("hyper-bot")
+config = configurator.BotConfig.get("jianer-bot")
 
 __all__ = ["run", "reg", "stop", "Actions", "config"]
 
