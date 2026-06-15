@@ -2,4 +2,5 @@
 build~=1.2
 pytest~=8.3
 setuptools~=70.0
+twine~=6.2
 wheel~=0.45
