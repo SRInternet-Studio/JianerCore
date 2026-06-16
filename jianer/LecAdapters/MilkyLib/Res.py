@@ -96,11 +96,11 @@ class SegmentBase(ABC):
         elif ma("image"):
             return builder.image(data["data"]["file"], data["data"].get("summary", "[Image]")).build()[0]
         elif ma("at"):
-            if data["data"].get("user_id") == "all":
+            if data["data"].get("qq") == "all":
                 return builder.mention_all().build()[0]
-            return builder.mention(data["data"].get("qq")).build()[0]
+            return builder.mention(int(data["data"].get("qq"))).build()[0]
         elif ma("reply"):
-            return builder.reply(msg_deid(data["data"]["id"])[1]).build()[0]
+            return builder.reply(msg_deid(int(data["data"]["id"]))[1]).build()[0]
         elif ma("face"):
             return builder.face(data["data"]["id"]).build()[0]
         elif ma("record"):
