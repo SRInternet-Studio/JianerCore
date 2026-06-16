@@ -1,3 +1,5 @@
+import sys
+
 PINK = "\033[95m"
 LIGHT_PINK = "\033[38;5;218m"
 HOT_PINK = "\033[38;5;205m"
@@ -27,7 +29,13 @@ def color_txt(text: str, color: tuple[int, int, int]) -> str:
     return f"\x1b[38;2;{r};{g};{b}m{text}\x1b[0m"
 
 
+def clear_screen() -> None:
+    if sys.stdout.isatty():
+        print("\033[2J\033[H", end="", flush=True)
+
+
 def play_startup():
+    clear_screen()
     print()
     for index, line in enumerate(ASCII_ART.strip("\n").splitlines()):
         color = STARTUP_COLORS[index % len(STARTUP_COLORS)]
