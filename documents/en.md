@@ -42,7 +42,7 @@ configurator.BotConfig.load_from(
 
 from jianer.adapters import builtins as adapters
 
-adapters.load_onebot()
+adapters.load_configured()
 
 from jianer import Client
 from jianer.events import GroupMessageEvent

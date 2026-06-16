@@ -20,7 +20,7 @@ if True:
 
     from jianer.adapters import builtins as adp
 
-    adp.load_onebot()
+    adp.load_configured()
 
     from jianer import listener, Client
     from jianer.events import *
