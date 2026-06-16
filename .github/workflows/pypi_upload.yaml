@@ -1,4 +1,4 @@
-name: HypeR Core PyPi Upload
+name: JianerCore PyPI Upload
 
 on:
   release:
@@ -25,11 +25,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install setuptools wheel
+          pip install build
 
       - name: Build package
-        run: |
-          python setup.py bdist_wheel sdist
+        run: python -m build
 
       - name: Publish package to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
