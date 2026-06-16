@@ -1,3 +1,4 @@
+from .. import configurator
 from . import replace_res, replace_common, replace_listener
 
 
@@ -27,3 +28,14 @@ def load_milky():
     from jianer.LecAdapters import Milky as MilkyListener
 
     replace_listener(MilkyListener)
+
+
+def load_configured(config_name: str = "jianer-bot"):
+    config = configurator.BotConfig.get(config_name)
+    protocol = str(config.protocol).casefold()
+    if protocol == "onebot":
+        load_onebot()
+    elif protocol == "milky":
+        load_milky()
+    else:
+        raise ValueError(f"Unsupported adapter protocol: {config.protocol}")
