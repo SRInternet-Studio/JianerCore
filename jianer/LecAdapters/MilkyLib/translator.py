@@ -47,7 +47,14 @@ def normalize_uri(uri: Optional[str]) -> Optional[str]:
     if len(raw) == 0:
         return raw
     lower = raw.lower()
-    if lower.startswith(("file://", "http://", "https://", "base64://")):
+    if lower.startswith("file://"):
+        path = raw[len("file://"):].replace("\\", "/")
+        while "//" in path:
+            path = path.replace("//", "/")
+        if len(path) >= 2 and path[1] == ":":
+            path = "/" + path
+        return f"file://{path}"
+    if lower.startswith(("http://", "https://", "base64://")):
         return raw
     if len(raw) >= 3 and raw[1] == ":" and raw[2] in ("\\", "/"):
         path = raw.replace("\\", "/")

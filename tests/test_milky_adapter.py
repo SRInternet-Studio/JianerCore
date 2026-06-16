@@ -1,6 +1,18 @@
+import asyncio
+
+import pytest
+
+from jianer.LecAdapters.Milky import Actions
 from jianer.LecAdapters.MilkyLib.Manager import Packet, reports
-from jianer.LecAdapters.MilkyLib.translator import MilkyHttpConnection, message_translator, msg_enid, normalize_uri
+from jianer.LecAdapters.MilkyLib.translator import (
+    MilkyHttpConnection,
+    MilkyOutGoingSegBuilder,
+    message_translator,
+    msg_enid,
+    normalize_uri,
+)
 from jianer.LecAdapters.MilkyLib.types import consume_milky_event
+from jianer.utils import errors
 
 
 def test_milky_message_translator_accepts_common_field_variants():
@@ -57,3 +69,28 @@ def test_milky_packet_stores_echoed_response(monkeypatch):
 
 def test_milky_normalize_uri_keeps_remote_urls():
     assert normalize_uri("https://example.test/file.png") == "https://example.test/file.png"
+
+
+def test_milky_normalize_uri_fixes_windows_file_urls():
+    assert normalize_uri("file://D:\\SRInternet.SR\\JianerCore\\ban.png") == (
+        "file:///D:/SRInternet.SR/JianerCore/ban.png"
+    )
+
+
+def test_milky_image_segment_normalizes_windows_file_url():
+    segment = MilkyOutGoingSegBuilder().image("file://D:\\SRInternet.SR\\JianerCore\\ban.png").build()[0]
+
+    assert segment["data"]["uri"] == "file:///D:/SRInternet.SR/JianerCore/ban.png"
+
+
+def test_milky_send_raises_when_api_rejects(monkeypatch):
+    connection = MilkyHttpConnection("ws://127.0.0.1:3000")
+
+    def fake_http_send(endpoint, data):
+        return {"status": "failed", "retcode": 400, "message": "bad payload", "data": None}
+
+    monkeypatch.setattr(connection, "http_send", fake_http_send)
+    actions = Actions(connection)
+
+    with pytest.raises(errors.ActionFailedError, match="Milky send failed"):
+        asyncio.run(actions.send("hello", group_id=10001))
