@@ -15,7 +15,7 @@ from .MilkyLib.types import MilkyOutgoingSegment, consume_segment, consume_segme
 
 config = configurator.BotConfig.get("jianer-bot")
 logger = hyperogger.Logger()
-logger.set_level(config.log_level)
+logger.set_level(config.log_level if config else "INFO")
 listener_ran = False
 
 
@@ -96,6 +96,10 @@ class Actions:
             if self._is_successful_response(fallback_res):
                 packet = fallback_packet
                 res = fallback_res
+
+        if not self._is_successful_response(res):
+            logger.error(f"Milky send failed via {packet.endpoint}: {res}")
+            raise errors.ActionFailedError(f"Milky send failed via {packet.endpoint}: {res}")
 
         if isinstance(res, dict):
             data = res.get("data")

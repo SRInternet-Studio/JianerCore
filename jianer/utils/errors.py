@@ -18,6 +18,11 @@ class ArgsInvalidError(Exception):
         super().__init__(message)
 
 
+class ActionFailedError(Exception):
+    def __init__(self, message: str = None):
+        super().__init__(message)
+
+
 class ConfigError(Exception):
     def __init__(self, message: str = None):
         super().__init__(message)
