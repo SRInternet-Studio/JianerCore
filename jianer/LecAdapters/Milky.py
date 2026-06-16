@@ -66,11 +66,14 @@ class Actions:
 
         outgoing: list[MilkyOutgoingSegment] = []
         for seg in message:
-            if hasattr(seg, "milky_outgoing_seg"):
-                outgoing_seg = consume_segment(seg.milky_outgoing_seg())
-                outgoing.append(outgoing_seg if outgoing_seg is not None else make_text_segment(str(seg)))
-            else:
-                outgoing.append(make_text_segment(str(seg)))
+            try:
+                if hasattr(seg, "milky_outgoing_seg"):
+                    outgoing_seg = consume_segment(seg.milky_outgoing_seg())
+                    outgoing.append(outgoing_seg if outgoing_seg is not None else make_text_segment(str(seg)))
+                else:
+                    outgoing.append(make_text_segment(str(seg)))
+            except (FileNotFoundError, OSError, ValueError) as exc:
+                raise errors.ArgsInvalidError(f"Invalid Milky outgoing segment {seg}: {exc}") from exc
 
         if group_id is not None:
             scene = 1
