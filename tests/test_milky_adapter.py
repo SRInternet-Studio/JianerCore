@@ -11,6 +11,7 @@ from jianer.LecAdapters.MilkyLib.translator import (
     msg_enid,
     normalize_uri,
 )
+from jianer.LecAdapters.MilkyLib import translator
 from jianer.LecAdapters.MilkyLib.types import consume_milky_event
 from jianer.utils import errors
 
@@ -94,3 +95,37 @@ def test_milky_send_raises_when_api_rejects(monkeypatch):
 
     with pytest.raises(errors.ActionFailedError, match="Milky send failed"):
         asyncio.run(actions.send("hello", group_id=10001))
+
+
+def test_milky_http_send_retries_transient_non_json_502(monkeypatch):
+    class Response:
+        def __init__(self, status_code, text, payload=None):
+            self.status_code = status_code
+            self.text = text
+            self._payload = payload
+
+        def json(self):
+            if self._payload is None:
+                raise translator.json.JSONDecodeError("bad json", self.text, 0)
+            return self._payload
+
+    responses = [
+        Response(502, ""),
+        Response(200, '{"status":"ok"}', {"status": "ok", "retcode": 0, "data": {"message_seq": 1}}),
+    ]
+    calls = []
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        return responses.pop(0)
+
+    monkeypatch.setattr(translator.httpx, "post", fake_post)
+    monkeypatch.setattr(translator.time, "sleep", lambda seconds: None)
+    connection = MilkyHttpConnection("ws://127.0.0.1:3000", auth="secret")
+
+    response = connection.http_send("send_group_message", {"group_id": 1, "message": []})
+
+    assert response["status"] == "ok"
+    assert len(calls) == 2
+    assert calls[0][1]["timeout"] == 15.0
+    assert calls[0][1]["headers"] == {"Authorization": "Bearer secret"}
