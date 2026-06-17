@@ -10,6 +10,7 @@ from jianer.LecAdapters.MilkyLib.translator import (
     message_translator,
     msg_enid,
     normalize_uri,
+    prepare_outgoing_media_uri,
 )
 from jianer.LecAdapters.MilkyLib import translator
 from jianer.LecAdapters.MilkyLib.types import consume_milky_event
@@ -78,10 +79,32 @@ def test_milky_normalize_uri_fixes_windows_file_urls():
     )
 
 
-def test_milky_image_segment_normalizes_windows_file_url():
-    segment = MilkyOutGoingSegBuilder().image("file://D:\\SRInternet.SR\\JianerCore\\ban.png").build()[0]
+def test_milky_prepare_outgoing_media_uri_keeps_remote_urls():
+    assert prepare_outgoing_media_uri("https://example.test/file.png") == "https://example.test/file.png"
 
-    assert segment["data"]["uri"] == "file:///D:/SRInternet.SR/JianerCore/ban.png"
+
+def test_milky_image_segment_inlines_local_file_as_base64(tmp_path):
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"test-image")
+
+    segment = MilkyOutGoingSegBuilder().image(str(image)).build()[0]
+
+    assert segment["data"]["uri"] == "base64://dGVzdC1pbWFnZQ=="
+
+
+def test_milky_image_segment_inlines_bare_local_filename(tmp_path, monkeypatch):
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"test-image")
+    monkeypatch.chdir(tmp_path)
+
+    segment = MilkyOutGoingSegBuilder().image("image.bin").build()[0]
+
+    assert segment["data"]["uri"] == "base64://dGVzdC1pbWFnZQ=="
+
+
+def test_milky_image_segment_rejects_missing_local_file():
+    with pytest.raises(FileNotFoundError, match="Milky media file does not exist"):
+        MilkyOutGoingSegBuilder().image("file://D:\\SRInternet.SR\\JianerCore\\missing.png")
 
 
 def test_milky_send_raises_when_api_rejects(monkeypatch):
