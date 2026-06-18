@@ -9,7 +9,7 @@ from ..utils import errors
 from ..utils.apiresponse import *
 from ..utils.hypetyping import Any, NoReturn, Union
 from .FeishuLib.Manager import Packet, reports
-from .FeishuLib.client import FeishuHttpConnection, parse_json_content
+from .FeishuLib.client import FeishuHttpConnection, FeishuOapiConnection, parse_json_content
 
 config = configurator.BotConfig.get("jianer-bot")
 logger = hyperogger.Logger()
@@ -44,11 +44,11 @@ def _message_to_feishu(message: Union[common.Message, str]) -> tuple[str, dict]:
 
 
 class Actions:
-    def __init__(self, cnt: FeishuHttpConnection):
+    def __init__(self, cnt: Union[FeishuHttpConnection, FeishuOapiConnection]):
         self.connection = cnt
 
         class CustomAction:
-            def __init__(self, cnt_i: FeishuHttpConnection):
+            def __init__(self, cnt_i: Union[FeishuHttpConnection, FeishuOapiConnection]):
                 self.connection = cnt_i
 
             def __getattr__(self, item) -> callable:
@@ -192,10 +192,10 @@ def reg(func: callable) -> None:
     handler = func
 
 
-connection: FeishuHttpConnection
+connection: Union[FeishuHttpConnection, FeishuOapiConnection]
 
 
-def _build_connection() -> FeishuHttpConnection:
+def _build_connection() -> Union[FeishuHttpConnection, FeishuOapiConnection]:
     conn_config = config.connection
     others = config.others if isinstance(config.others, dict) else {}
     app_id = _config_value(conn_config, "app_id") or others.get("feishu_app_id")
@@ -203,16 +203,33 @@ def _build_connection() -> FeishuHttpConnection:
     if not app_id or not app_secret:
         raise errors.ArgsInvalidError("Feishu adapter requires app_id and app_secret in connection config.")
 
-    return FeishuHttpConnection(
+    mode = str(_config_value(conn_config, "mode", "OAPI") or "OAPI").lower()
+    verification_token = _config_value(conn_config, "verification_token") or others.get("feishu_verification_token")
+    base_url = _config_value(conn_config, "base_url", "https://open.feishu.cn")
+    user_id_type = _config_value(conn_config, "user_id_type", "open_id")
+    tenant_access_token = _config_value(conn_config, "tenant_access_token")
+    if mode in {"webhook", "http", "httpc", "callback"}:
+        return FeishuHttpConnection(
+            app_id=app_id,
+            app_secret=app_secret,
+            host=_config_value(conn_config, "host", "0.0.0.0"),
+            port=_config_value(conn_config, "port", 8080),
+            endpoint=_config_value(conn_config, "endpoint", "/"),
+            verification_token=verification_token,
+            base_url=base_url,
+            user_id_type=user_id_type,
+            tenant_access_token=tenant_access_token,
+        )
+
+    return FeishuOapiConnection(
         app_id=app_id,
         app_secret=app_secret,
-        host=_config_value(conn_config, "host", "0.0.0.0"),
-        port=_config_value(conn_config, "port", 8080),
-        endpoint=_config_value(conn_config, "endpoint", "/"),
-        verification_token=_config_value(conn_config, "verification_token") or others.get("feishu_verification_token"),
-        base_url=_config_value(conn_config, "base_url", "https://open.feishu.cn"),
-        user_id_type=_config_value(conn_config, "user_id_type", "open_id"),
-        tenant_access_token=_config_value(conn_config, "tenant_access_token"),
+        verification_token=verification_token,
+        encrypt_key=_config_value(conn_config, "encrypt_key") or others.get("feishu_encrypt_key"),
+        base_url=base_url,
+        user_id_type=user_id_type,
+        tenant_access_token=tenant_access_token,
+        log_level=_config_value(conn_config, "log_level", config.log_level if config else "INFO"),
     )
 
 
@@ -232,7 +249,10 @@ def run() -> NoReturn:
             connection=connection,
         )
         threading.Thread(target=lambda: __handler(data, actions), daemon=True).start()
-        logger.info(f"Feishu event listener started at http://{connection.host}:{connection.port}{connection.endpoint}")
+        if isinstance(connection, FeishuHttpConnection):
+            logger.info(f"Feishu event listener started at http://{connection.host}:{connection.port}{connection.endpoint}")
+        else:
+            logger.info(f"Feishu Lark OAPI long connection started for app_id {connection.app_id}")
 
         while True:
             data = connection.recv()

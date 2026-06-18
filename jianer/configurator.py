@@ -29,16 +29,18 @@ class BotHTTPC(BaseConfig):
 
 
 class BotFeishuC(BaseConfig):
-    mode: str = "FEISHU"
+    mode: str = "OAPI"
     app_id: str
     app_secret: str
     host: str = "0.0.0.0"
     port: int = 8080
     endpoint: str = "/"
     verification_token: str = None
+    encrypt_key: str = None
     base_url: str = "https://open.feishu.cn"
     user_id_type: str = "open_id"
     tenant_access_token: str = None
+    log_level: str = "INFO"
 
 
 class BotConfig(BaseConfig):

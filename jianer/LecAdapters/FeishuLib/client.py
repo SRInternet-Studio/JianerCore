@@ -3,7 +3,8 @@ import logging
 import queue
 import threading
 import time
-from typing import Optional
+from enum import Enum
+from typing import Any, Optional
 
 import flask
 import httpx
@@ -12,6 +13,63 @@ from ...adapters.obuilder import OneBotEventBuilder, OneBotJsonMessageBuilder
 
 
 FEISHU_BASE_URL = "https://open.feishu.cn"
+
+
+def object_to_plain(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: object_to_plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [object_to_plain(item) for item in value]
+    if isinstance(value, Enum):
+        return value.value if isinstance(value.value, (str, int, float, bool)) else value.name
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if hasattr(value, "__dict__"):
+        return {
+            key: object_to_plain(item)
+            for key, item in vars(value).items()
+            if not key.startswith("_") and item is not None
+        }
+    return value
+
+
+def _raw_response_json(response: Any) -> Optional[dict]:
+    raw = getattr(response, "raw", None)
+    content = getattr(raw, "content", None)
+    if not content:
+        return None
+    if isinstance(content, bytes):
+        content = content.decode("utf-8")
+    if not isinstance(content, str):
+        return None
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def lark_response_to_dict(response: Any) -> dict:
+    if isinstance(response, dict):
+        return response
+
+    raw_body = _raw_response_json(response)
+    if raw_body is not None:
+        data = object_to_plain(getattr(response, "data", None))
+        if data and "data" not in raw_body:
+            raw_body["data"] = data
+        return raw_body
+
+    code = getattr(response, "code", 0)
+    result = {
+        "code": 0 if code is None else code,
+        "msg": getattr(response, "msg", "") or "",
+        "data": object_to_plain(getattr(response, "data", None)) or {},
+    }
+    error = object_to_plain(getattr(response, "error", None))
+    if error:
+        result["error"] = error
+    return result
 
 
 def parse_json_content(content) -> dict:
@@ -307,3 +365,172 @@ class FeishuHttpConnection:
         path = kwargs.pop("path", endpoint)
         return self.request(method, path, params=kwargs.pop("params", None), json_body=kwargs or None)
 
+
+class FeishuOapiConnection:
+    def __init__(
+            self,
+            app_id: str,
+            app_secret: str,
+            verification_token: str = None,
+            encrypt_key: str = None,
+            base_url: str = FEISHU_BASE_URL,
+            user_id_type: str = "open_id",
+            tenant_access_token: str = None,
+            log_level: str = "INFO",
+            lark_module: Any = None,
+    ):
+        self.app_id = app_id
+        self.app_secret = app_secret
+        self.verification_token = verification_token
+        self.encrypt_key = encrypt_key
+        self.base_url = base_url.rstrip("/")
+        self.user_id_type = user_id_type
+        self.tenant_access_token = tenant_access_token
+        self.log_level = log_level
+        self.bot_open_id = None
+        self.reports = queue.Queue()
+        self.listener_started = False
+        self.lark = lark_module
+        self.api_client = None
+        self.ws_client = None
+        self.thread = None
+
+    def _load_lark(self):
+        if self.lark is not None:
+            return self.lark
+        try:
+            import lark_oapi as lark
+        except ImportError as exc:
+            raise RuntimeError("Feishu Lark OAPI adapter requires lark-oapi. Install it with pip install lark-oapi.") from exc
+        self.lark = lark
+        return self.lark
+
+    def _lark_log_level(self, lark):
+        level = str(self.log_level or "INFO").upper()
+        return getattr(lark.LogLevel, level, getattr(lark.LogLevel, "INFO"))
+
+    def _request_option(self, lark):
+        if not self.tenant_access_token:
+            return None
+        builder = lark.RequestOption.builder()
+        return builder.tenant_access_token(self.tenant_access_token).build()
+
+    def _build_api_client(self, lark):
+        builder = lark.Client.builder() \
+            .app_id(self.app_id) \
+            .app_secret(self.app_secret) \
+            .log_level(self._lark_log_level(lark))
+        if self.base_url != FEISHU_BASE_URL:
+            builder = builder.domain(self.base_url)
+        return builder.build()
+
+    def _build_event_handler(self, lark):
+        builder = lark.EventDispatcherHandler.builder(self.encrypt_key or "", self.verification_token or "")
+        builder = builder.register_p2_im_message_receive_v1(self._on_lark_event)
+        if hasattr(builder, "register_p2_application_bot_menu_v6"):
+            builder = builder.register_p2_application_bot_menu_v6(self._on_lark_event)
+        return builder.build()
+
+    def _on_lark_event(self, data) -> None:
+        payload = object_to_plain(data)
+        event = translate_event(payload, self.user_id_type, self.bot_open_id or self.app_id)
+        if event is not None:
+            self.reports.put(event)
+
+    def connect(self) -> None:
+        if self.listener_started:
+            return
+
+        lark = self._load_lark()
+        self.api_client = self._build_api_client(lark)
+        handler = self._build_event_handler(lark)
+        self.ws_client = lark.ws.Client(
+            self.app_id,
+            self.app_secret,
+            event_handler=handler,
+            log_level=self._lark_log_level(lark),
+            domain=self.base_url,
+            source="jianer-bot",
+        )
+        self.thread = threading.Thread(target=self.ws_client.start, daemon=True)
+        self.thread.start()
+        self.listener_started = True
+
+    def close(self) -> None:
+        self.listener_started = False
+
+    def recv(self) -> dict:
+        return self.reports.get()
+
+    def _ensure_api_client(self):
+        lark = self._load_lark()
+        if self.api_client is None:
+            self.api_client = self._build_api_client(lark)
+        return lark, self.api_client
+
+    def _http_method(self, lark, method: str):
+        method_name = str(method or "POST").upper()
+        if not hasattr(lark.HttpMethod, method_name):
+            raise ValueError(f"Unsupported Feishu HTTP method: {method}")
+        return getattr(lark.HttpMethod, method_name)
+
+    def request(self, method: str, path: str, *, params: dict = None, json_body: dict = None, auth: bool = True) -> dict:
+        lark, client = self._ensure_api_client()
+        path = path if path.startswith("/") else f"/{path}"
+        queries = []
+        for key, value in (params or {}).items():
+            if isinstance(value, (list, tuple)):
+                queries.extend((str(key), str(item)) for item in value)
+            else:
+                queries.append((str(key), str(value)))
+
+        builder = lark.BaseRequest.builder() \
+            .http_method(self._http_method(lark, method)) \
+            .uri(path) \
+            .queries(queries)
+        if auth:
+            builder = builder.token_types({lark.AccessTokenType.TENANT})
+        if json_body is not None:
+            builder = builder.body(json_body)
+
+        response = client.request(builder.build(), self._request_option(lark))
+        return lark_response_to_dict(response)
+
+    def send_message(
+            self,
+            receive_id: str,
+            msg_type: str,
+            content,
+            receive_id_type: str = "open_id",
+            uuid: str = None,
+    ) -> dict:
+        lark, client = self._ensure_api_client()
+        body_builder = lark.im.v1.CreateMessageRequestBody.builder() \
+            .receive_id(str(receive_id)) \
+            .msg_type(msg_type) \
+            .content(content if isinstance(content, str) else json.dumps(content, ensure_ascii=False))
+        if uuid:
+            body_builder = body_builder.uuid(uuid)
+
+        request = lark.im.v1.CreateMessageRequest.builder() \
+            .receive_id_type(receive_id_type) \
+            .request_body(body_builder.build()) \
+            .build()
+        response = client.im.v1.message.create(request, self._request_option(lark))
+        return lark_response_to_dict(response)
+
+    def get_bot_info(self) -> dict:
+        response = self.request("GET", "/open-apis/bot/v3/info")
+        bot = response.get("bot") or response.get("data") or {}
+        if isinstance(bot, dict):
+            self.bot_open_id = bot.get("open_id") or self.bot_open_id
+        return response
+
+    def call(self, endpoint: str, **kwargs) -> dict:
+        if endpoint == "send_message":
+            return self.send_message(**kwargs)
+        if endpoint == "get_bot_info":
+            return self.get_bot_info()
+        method = kwargs.pop("method", "POST")
+        path = kwargs.pop("path", endpoint)
+        return self.request(method, path, params=kwargs.pop("params", None), json_body=kwargs or None)
