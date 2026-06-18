@@ -28,6 +28,19 @@ class BotHTTPC(BaseConfig):
     auth: str
 
 
+class BotFeishuC(BaseConfig):
+    mode: str = "FEISHU"
+    app_id: str
+    app_secret: str
+    host: str = "0.0.0.0"
+    port: int = 8080
+    endpoint: str = "/"
+    verification_token: str = None
+    base_url: str = "https://open.feishu.cn"
+    user_id_type: str = "open_id"
+    tenant_access_token: str = None
+
+
 class BotConfig(BaseConfig):
     protocol: str = "OneBot"
     owner: list
@@ -35,6 +48,7 @@ class BotConfig(BaseConfig):
     silents: list
     connection: BotHTTPC
     connection: BotWSC
+    connection: BotFeishuC
     connection: dict
     log_level: str = "INFO"
     log_use_nf: bool = False
@@ -55,3 +69,5 @@ class BotConfig(BaseConfig):
                 self.connection = BotWSC(**self.connection)
             elif self.connection["mode"] == "HTTPC":
                 self.connection = BotHTTPC(**self.connection)
+        elif self.protocol == "Feishu":
+            self.connection = BotFeishuC(**self.connection)

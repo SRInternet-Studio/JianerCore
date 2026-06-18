@@ -30,6 +30,20 @@ def load_milky():
     replace_listener(MilkyListener)
 
 
+def load_feishu():
+    from jianer.LecAdapters.FeishuLib import Res as FeishuRes
+
+    replace_res(FeishuRes)
+
+    from jianer.LecAdapters.FeishuLib import Manager as FeishuCommon
+
+    replace_common(FeishuCommon)
+
+    from jianer.LecAdapters import Feishu as FeishuListener
+
+    replace_listener(FeishuListener)
+
+
 def load_configured(config_name: str = "jianer-bot"):
     config = configurator.BotConfig.get(config_name)
     protocol = str(config.protocol).casefold()
@@ -37,5 +51,7 @@ def load_configured(config_name: str = "jianer-bot"):
         load_onebot()
     elif protocol == "milky":
         load_milky()
+    elif protocol == "feishu":
+        load_feishu()
     else:
         raise ValueError(f"Unsupported adapter protocol: {config.protocol}")

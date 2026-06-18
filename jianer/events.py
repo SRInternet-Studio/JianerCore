@@ -296,6 +296,21 @@ class MessageReactionEvent(NoticeEvent):
         self.count = data.get("count")
 
 
+@em.reg("notice", "bot_menu")
+class BotMenuEvent(NoticeEvent):
+    def __init__(self, data: dict):
+        super().__init__(data)
+        self.operator_id = data.get("operator_id")
+        self.operator_name = data.get("operator_name")
+        self.event_key = data.get("event_key")
+        self.feishu_event = data.get("feishu_event")
+
+        self.print_log()
+
+    def print_log(self) -> None:
+        logger.info(f"Received bot menu event {self.event_key} from {self.operator_id}")
+
+
 @em.reg("notice", "bot_online")
 class BotOnLineEvent(NoticeEvent):
     def __init__(self, data: dict):

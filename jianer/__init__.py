@@ -36,6 +36,7 @@ class Client:
                 "events.NotifyEvent",
                 "events.GroupEssenceEvent",
                 "events.MessageReactionEvent",
+                "events.BotMenuEvent",
                 "events.GroupAddInviteEvent",
                 "events.HyperListenerStartNotify",
                 "events.HyperListenerStopNotify"
