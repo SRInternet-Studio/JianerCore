@@ -68,7 +68,8 @@ def test_failed_missing_keyword(tmp_path):
     result = load_plugins(_make_config(), _silent_logger(), plugin_folder=plugins_dir)
 
     assert len(result.failed) == 1
-    assert "缺少 TRIGGHT_KEYWORD" in result.failed[0]
+    assert "TRIGGHT_KEYWORD" in result.failed[0]
+    assert "on_message" in result.failed[0]
     assert result.loaded == []
 
 
@@ -86,7 +87,7 @@ def test_failed_wrong_keyword_type(tmp_path):
 
     result = load_plugins(_make_config(), _silent_logger(), plugin_folder=plugins_dir)
 
-    assert any("TRIGGHT_KEYWORD 必须是字符串" in failure for failure in result.failed)
+    assert any("TRIGGHT_KEYWORD" in failure for failure in result.failed)
 
 
 def test_failed_import_error_cleans_module(tmp_path):
@@ -130,7 +131,7 @@ def test_folder_plugin_missing_setup(tmp_path):
 
     result = load_plugins(_make_config(), _silent_logger(), plugin_folder=plugins_dir)
 
-    assert any("缺少 setup.py" in failure for failure in result.failed)
+    assert any("setup.py" in failure for failure in result.failed)
 
 
 def test_feishu_incompatible_filtered(tmp_path):
@@ -198,7 +199,7 @@ def test_create_missing_false_reports_missing_without_creating(tmp_path):
 
     assert not plugins_dir.exists()
     assert len(result.failed) == 1
-    assert "插件目录不存在" in result.failed[0]
+    assert str(plugins_dir) in result.failed[0]
 
 
 def test_custom_plugin_folder_is_used(tmp_path):

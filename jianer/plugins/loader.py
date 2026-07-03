@@ -51,6 +51,9 @@ class LoadResult:
     disabled: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
     _help_lines: list[str] = field(default_factory=list)
+    plugin_map: dict[str, Any] = field(default_factory=dict)
+    dependency_order: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def help_text(self) -> str:

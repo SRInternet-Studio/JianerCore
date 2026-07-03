@@ -18,6 +18,8 @@ class Client:
     def __init__(self):
         self.records = {}
         self.lis = None
+        self.plugin_manager = None
+        self._plugin_dispatch_registered = False
 
     def subscribe(
             self,
@@ -57,6 +59,20 @@ class Client:
             await asyncio.gather(*tasks)
         else:
             return
+
+    def load_plugins(self, *plugin_folders, **kwargs):
+        from . import events
+        from .plugins import PluginManager
+
+        if self.plugin_manager is None:
+            self.plugin_manager = PluginManager()
+        result = self.plugin_manager.load_plugins(*plugin_folders, **kwargs)
+        if not self._plugin_dispatch_registered:
+            self.subscribe(self.plugin_manager.dispatch, events.GroupMessageEvent)
+            self.subscribe(self.plugin_manager.dispatch, events.PrivateMessageEvent)
+            self._plugin_dispatch_registered = True
+        self.plugin_manager.setup_client(self)
+        return result
 
     def run(self):
         from . import listener
