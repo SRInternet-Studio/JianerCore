@@ -9,6 +9,26 @@ from types import SimpleNamespace
 from jianer.plugins import load_plugins
 
 
+class _ListLogger:
+    def __init__(self):
+        self.info_messages = []
+        self.warning_messages = []
+        self.error_messages = []
+        self.debug_messages = []
+
+    def info(self, message):
+        self.info_messages.append(message)
+
+    def warning(self, message):
+        self.warning_messages.append(message)
+
+    def error(self, message):
+        self.error_messages.append(message)
+
+    def debug(self, message):
+        self.debug_messages.append(message)
+
+
 def _make_config(protocol: str = "OneBot"):
     return SimpleNamespace(protocol=protocol)
 
@@ -219,3 +239,19 @@ def test_custom_plugin_folder_is_used(tmp_path):
     result = load_plugins(plugin_folder=custom_dir)
 
     assert result.loaded_display == ["custom"]
+
+
+def test_loader_logs_load_result(tmp_path):
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    _write(
+        plugins_dir / "hello.py",
+        "TRIGGHT_KEYWORD = 'hello'\nasync def on_message(): return True\n",
+    )
+    logger = _ListLogger()
+
+    result = load_plugins(_make_config(), logger, plugin_folder=plugins_dir)
+
+    assert result.failed == []
+    assert any("已加载插件：" in message for message in logger.info_messages)
+    assert any("插件加载完成：1 成功，0 禁用，0 失败" in message for message in logger.info_messages)

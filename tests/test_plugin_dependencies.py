@@ -6,6 +6,22 @@ from pathlib import Path
 from jianer.plugins import PluginManager, is_valid_plugin_name
 
 
+class _ListLogger:
+    def __init__(self):
+        self.info_messages = []
+        self.warning_messages = []
+        self.error_messages = []
+
+    def info(self, message):
+        self.info_messages.append(message)
+
+    def warning(self, message):
+        self.warning_messages.append(message)
+
+    def error(self, message):
+        self.error_messages.append(message)
+
+
 def _write(path: Path, body: str) -> None:
     path.write_text(textwrap.dedent(body), encoding="utf-8")
 
@@ -181,3 +197,42 @@ def test_legacy_plugin_without_metadata_does_not_enter_new_manager(tmp_path):
     assert result.plugin_map == {}
     assert result.loaded == []
     assert any("missing PluginMetadata" in warning for warning in result.warnings)
+
+
+def test_plugin_manager_logs_load_result(tmp_path):
+    plugins = tmp_path / "plugins"
+    plugins.mkdir()
+    _write(
+        plugins / "loaded.py",
+        """
+        from jianer.plugins import PluginMetadata
+        __plugin_meta__ = PluginMetadata(name="jianerbot-plugin-logged")
+        """,
+    )
+    logger = _ListLogger()
+
+    result = PluginManager(logger=logger).load_plugins(plugins)
+
+    assert result.failed == []
+    assert any("已加载插件：jianerbot-plugin-logged" in message for message in logger.info_messages)
+    assert any("插件加载完成：1 成功，0 失败，0 警告" in message for message in logger.info_messages)
+
+
+def test_plugin_manager_logs_load_warnings(tmp_path):
+    plugins = tmp_path / "plugins"
+    plugins.mkdir()
+    _write(
+        plugins / "legacy.py",
+        """
+        TRIGGHT_KEYWORD = "hello"
+        async def on_message():
+            return True
+        """,
+    )
+    logger = _ListLogger()
+
+    result = PluginManager(logger=logger).load_plugins(plugins)
+
+    assert result.loaded == []
+    assert any("未加载任何新式插件" in message for message in logger.info_messages)
+    assert any("插件加载警告：" in message for message in logger.warning_messages)

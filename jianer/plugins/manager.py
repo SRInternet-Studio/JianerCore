@@ -5,7 +5,6 @@ from __future__ import annotations
 import ast
 import importlib
 import importlib.util
-import logging
 import sys
 import traceback
 import uuid
@@ -42,13 +41,11 @@ class PluginManager:
 
     def __init__(
         self,
-        logger: logging.Logger | None = None,
+        logger: Any | None = None,
         *,
         builtin_plugins: dict[str, str] | None = None,
     ) -> None:
-        self.logger = logger or logging.getLogger("jianer.plugins.manager")
-        if not self.logger.handlers:
-            self.logger.addHandler(logging.NullHandler())
+        self.logger = logger or _create_default_logger()
         self.builtin_plugins = dict(BUILTIN_PLUGINS)
         if builtin_plugins:
             self.builtin_plugins.update(builtin_plugins)
@@ -88,6 +85,7 @@ class PluginManager:
             self.load_plugin(plugin_id)
 
         self._fill_result(result)
+        self._log_load_result(result)
         return result
 
     def load_plugin(self, plugin: str | Path) -> Plugin | None:
@@ -123,11 +121,7 @@ class PluginManager:
                     handled = True
                     break
             except Exception:
-                self.logger.error(
-                    "Plugin %s dispatch failed:\n%s",
-                    plugin_id,
-                    traceback.format_exc(),
-                )
+                self._log("error", f"插件派发失败：{plugin_id}\n{traceback.format_exc()}")
         return handled
 
     def setup_client(self, client: Any) -> None:
@@ -277,6 +271,7 @@ class PluginManager:
         )
         self.plugins[plugin_id] = loaded
         self.dependency_order.append(plugin_id)
+        self._log("info", f"已加载插件：{plugin_id}")
         return loaded
 
     def _import_candidate(self, candidate: _PluginCandidate) -> ModuleType | None:
@@ -297,11 +292,7 @@ class PluginManager:
             self._fail(f"{candidate.display_name} (import error: {exc})")
             if "unique_module_name" in locals():
                 sys.modules.pop(unique_module_name, None)
-            self.logger.error(
-                "Plugin %s import failed:\n%s",
-                candidate.display_name,
-                traceback.format_exc(),
-            )
+            self._log("error", f"插件导入失败：{candidate.display_name}\n{traceback.format_exc()}")
             return None
 
     def _fill_result(self, result: LoadResult) -> None:
@@ -320,6 +311,29 @@ class PluginManager:
     def _warn(self, message: str) -> None:
         if message not in self.warnings:
             self.warnings.append(message)
+
+    def _log(self, level: str, message: str) -> None:
+        logger_method = getattr(self.logger, level, None)
+        if callable(logger_method):
+            logger_method(message)
+
+    def _log_load_result(self, result: LoadResult) -> None:
+        self._log(
+            "info",
+            f"插件加载完成：{len(result.loaded)} 成功，{len(result.failed)} 失败，{len(result.warnings)} 警告",
+        )
+        if not result.loaded:
+            self._log("info", "未加载任何新式插件")
+        for warning in result.warnings:
+            self._log("warning", f"插件加载警告：{warning}")
+        for failure in result.failed:
+            self._log("error", f"插件加载失败：{failure}")
+
+
+def _create_default_logger() -> Any:
+    from .. import hyperogger
+
+    return hyperogger.Logger()
 
 
 def _read_module_metadata(module_name: str) -> PluginMetadata | None:

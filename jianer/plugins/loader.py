@@ -17,7 +17,6 @@ existing plugin ecosystem.
 from __future__ import annotations
 
 import importlib.util
-import logging
 import sys
 import traceback
 import uuid
@@ -62,7 +61,7 @@ class LoadResult:
 
 def load_plugins(
     config: Any = None,
-    logger: logging.Logger | None = None,
+    logger: Any | None = None,
     *,
     plugin_folder: str | Path = PLUGIN_FOLDER,
     protocol: str | None = None,
@@ -88,10 +87,12 @@ def load_plugins(
             folder.mkdir(parents=True, exist_ok=True)
         else:
             result.failed.append(f"{folder} (插件目录不存在)")
+            _log_load_result(logger, result)
             return result
 
     if not folder.is_dir():
         result.failed.append(f"{folder} (插件路径不是目录)")
+        _log_load_result(logger, result)
         return result
 
     _ensure_import_parent(folder)
@@ -111,7 +112,7 @@ def load_plugins(
         plugin_base_name = _display_name(filename)
         if protocol_now == "feishu" and plugin_base_name in incompatible_names:
             result.disabled.append(plugin_base_name)
-            logger.info("Feishu 模式跳过不兼容插件: %s", plugin_base_name)
+            logger.info("Feishu 模式跳过不兼容插件：%s", plugin_base_name)
             continue
 
         if entry.is_dir():
@@ -126,7 +127,7 @@ def load_plugins(
         else:
             logger.debug("跳过非插件文件或目录: %s", filename)
 
-    logger.info("成功加载 %s 个插件", len(result.loaded))
+    _log_load_result(logger, result)
     return result
 
 
@@ -135,13 +136,13 @@ def _register_module(
     unique_module_name: str,
     module_name: str,
     result: LoadResult,
-    logger: logging.Logger,
+    logger: Any,
 ) -> bool:
     """Validate and register an already executed plugin module."""
 
     if not (hasattr(module, "TRIGGHT_KEYWORD") and hasattr(module, "on_message")):
         result.failed.append(
-            f"{module_name} (缺少 TRIGGHT_KEYWORD：触发标识符 或 on_message：触发函数后端)"
+            f"{module_name} (缺少 TRIGGHT_KEYWORD: 触发标识符 或 on_message: 触发函数后端)"
         )
         return False
     if not isinstance(module.TRIGGHT_KEYWORD, str):
@@ -159,7 +160,7 @@ def _register_module(
                 result._help_lines.append(line)
 
     logger.info(
-        "已加载插件: %s (关键词: %s)",
+        "已加载插件：%s (关键词：%s)",
         unique_module_name,
         module.TRIGGHT_KEYWORD,
     )
@@ -170,7 +171,7 @@ def _load_single(
     entry_path: Path,
     module_name: str,
     result: LoadResult,
-    logger: logging.Logger,
+    logger: Any,
 ) -> None:
     """Load one plugin entry file and clean ``sys.modules`` on failure."""
 
@@ -214,13 +215,51 @@ def _resolve_protocol(config: Any, protocol: str | None) -> str:
     return str(getattr(config, "protocol", "")).lower()
 
 
-def _get_logger(logger: logging.Logger | None) -> logging.Logger:
+class _LoggerAdapter:
+    def __init__(self, logger: Any) -> None:
+        self.logger = logger
+
+    def debug(self, message: str, *args: Any) -> None:
+        self._log("debug", message, *args)
+
+    def info(self, message: str, *args: Any) -> None:
+        self._log("info", message, *args)
+
+    def warning(self, message: str, *args: Any) -> None:
+        self._log("warning", message, *args)
+
+    def error(self, message: str, *args: Any) -> None:
+        self._log("error", message, *args)
+
+    def _log(self, level: str, message: str, *args: Any) -> None:
+        if args:
+            message = message % args
+        logger_method = getattr(self.logger, level, None)
+        if callable(logger_method):
+            logger_method(message)
+
+
+def _get_logger(logger: Any | None) -> _LoggerAdapter:
     if logger is not None:
-        return logger
-    fallback = logging.getLogger("jianer.plugins.loader")
-    if not fallback.handlers:
-        fallback.addHandler(logging.NullHandler())
-    return fallback
+        return _LoggerAdapter(logger)
+    from .. import hyperogger
+
+    return _LoggerAdapter(hyperogger.Logger())
+
+
+def _log_load_result(logger: Any, result: LoadResult) -> None:
+    logger.info(
+        "插件加载完成：%s 成功，%s 禁用，%s 失败",
+        len(result.loaded),
+        len(result.disabled),
+        len(result.failed),
+    )
+    if not result.loaded:
+        logger.info("未加载任何旧式插件")
+    for disabled in result.disabled:
+        logger.info("已禁用插件：%s", disabled)
+    for failure in result.failed:
+        logger.error("插件加载失败：%s", failure)
 
 
 def _display_name(filename: str) -> str:
