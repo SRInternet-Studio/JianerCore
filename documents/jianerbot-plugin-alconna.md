@@ -1,6 +1,6 @@
-# jianer-alconna 使用文档
+# jianerbot-plugin-alconna 使用文档
 
-`jianer-alconna` 是 JianerCore 内置插件，用来给新式插件提供统一的消息接收、命令解析和消息发送能力。它不是单独安装的 PyPI 包，而是随 `jianer-bot` 一起发布。
+`jianerbot-plugin-alconna` 是 JianerCore 内置插件，用来给新式插件提供统一的消息接收、命令解析和消息发送能力。它不是单独安装的 PyPI 包，而是随 `jianer-bot` 一起发布。
 
 第三方插件的 ID 统一使用：
 
@@ -15,7 +15,7 @@ jianerbot-plugin-aichat
 jianerbot-plugin-ai-chat
 ```
 
-`jianer-alconna` 是内置插件 ID，是这个命名规则的保留例外。
+旧 ID `jianer-alconna` 仍作为过渡加载别名保留；新插件请统一依赖 `jianerbot-plugin-alconna`。
 
 ## 快速开始
 
@@ -34,7 +34,7 @@ from jianer.plugins.builtin.alconna import Command, UniMessage
 
 __plugin_meta__ = PluginMetadata(
     name="jianerbot-plugin-ping",
-    requires={"jianer-alconna"},
+    requires={"jianerbot-plugin-alconna"},
 )
 
 
@@ -64,11 +64,11 @@ from jianer.plugins import PluginMetadata
 
 __plugin_meta__ = PluginMetadata(
     name="jianerbot-plugin-my-feature",
-    requires={"jianer-alconna"},
+    requires={"jianerbot-plugin-alconna"},
 )
 ```
 
-`PluginManager` 会先加载 `jianer-alconna`，再加载依赖它的插件。
+`PluginManager` 会先加载 `jianerbot-plugin-alconna`，再加载依赖它的插件。
 
 也可以手动加载：
 
@@ -76,7 +76,7 @@ __plugin_meta__ = PluginMetadata(
 from jianer.plugins import PluginManager
 
 manager = PluginManager()
-manager.load_plugin("jianer-alconna")
+manager.load_plugin("jianerbot-plugin-alconna")
 ```
 
 ## 插件命名规则
@@ -103,7 +103,7 @@ __plugin_meta__ = PluginMetadata(name="jianerbot-plugin-ai-chat")
 ```python
 __plugin_meta__ = PluginMetadata(
     name="jianerbot-plugin-ai-chat",
-    requires={"jianerbot-plugin-vector-store", "jianer-alconna"},
+    requires={"jianerbot-plugin-vector-store", "jianerbot-plugin-alconna"},
 )
 ```
 
@@ -167,7 +167,7 @@ from jianer.plugins.builtin.alconna import Command, UniMessage
 
 __plugin_meta__ = PluginMetadata(
     name="jianerbot-plugin-admin",
-    requires={"jianer-alconna"},
+    requires={"jianerbot-plugin-alconna"},
 )
 
 ban = Alconna("ban", Args["user", str], Option("--reason", Args["reason", str]))
@@ -310,7 +310,7 @@ from jianer.plugins.builtin.alconna import Command, UniMessage
 __plugin_meta__ = PluginMetadata(
     name="jianerbot-plugin-echo",
     description="Echo command plugin.",
-    requires={"jianer-alconna"},
+    requires={"jianerbot-plugin-alconna"},
 )
 
 
@@ -329,7 +329,7 @@ from jianer.plugins.builtin.alconna import Command, UniMessage
 
 __plugin_meta__ = PluginMetadata(
     name="jianerbot-plugin-admin-tools",
-    requires={"jianer-alconna"},
+    requires={"jianerbot-plugin-alconna"},
 )
 
 mute = Alconna("mute", Args["user", str], Option("--duration", Args["seconds", int]))
@@ -360,12 +360,12 @@ __plugin_meta__ = PluginMetadata(name="aichat")
 
 ### 我是否需要安装 nonebot-plugin-alconna？
 
-不需要。`jianer-alconna` 参考了 `nonebot-plugin-alconna` 的统一收发思路，但它是 JianerCore 内置插件。命令解析使用的是 `arclet-alconna`。
+不需要。`jianerbot-plugin-alconna` 参考了 `nonebot-plugin-alconna` 的统一收发思路，但它是 JianerCore 内置插件。命令解析使用的是 `arclet-alconna`。
 
 ### 为什么字符串命令能力比较少？
 
 字符串命令是便利用法，只覆盖最常见的命令和单参数场景。复杂解析请直接传入 `arclet-alconna.Alconna` 对象。
 
-### 可以不使用 jianer-alconna 吗？
+### 可以不使用 jianerbot-plugin-alconna 吗？
 
 可以。插件可以直接实现 `dispatch(event, actions)`，但就需要自己处理命令匹配、目标推断和消息发送。

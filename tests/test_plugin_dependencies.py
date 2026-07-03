@@ -13,8 +13,9 @@ def _write(path: Path, body: str) -> None:
 def test_plugin_name_convention_allows_compact_and_hyphenated_names():
     assert is_valid_plugin_name("jianerbot-plugin-aichat")
     assert is_valid_plugin_name("jianerbot-plugin-ai-chat")
-    assert is_valid_plugin_name("jianer-alconna")
+    assert is_valid_plugin_name("jianerbot-plugin-alconna")
     assert not is_valid_plugin_name("aichat")
+    assert not is_valid_plugin_name("jianer-alconna")
     assert not is_valid_plugin_name("jianerbot-plugin-AIChat")
 
 

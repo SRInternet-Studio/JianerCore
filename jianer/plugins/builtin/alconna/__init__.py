@@ -13,7 +13,7 @@ from .... import common, segments
 from ...metadata import PluginMetadata
 
 __plugin_meta__ = PluginMetadata(
-    name="jianer-alconna",
+    name="jianerbot-plugin-alconna",
     description="Unified message sending and Alconna command matching for JianerCore plugins.",
 )
 

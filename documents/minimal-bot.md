@@ -167,7 +167,7 @@ from jianer.plugins.builtin.alconna import Command, UniMessage
 
 __plugin_meta__ = PluginMetadata(
     name="jianerbot-plugin-ping",
-    requires={"jianer-alconna"},
+    requires={"jianerbot-plugin-alconna"},
 )
 
 

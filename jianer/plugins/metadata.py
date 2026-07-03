@@ -9,7 +9,7 @@ from typing import Any
 
 PLUGIN_NAME_PREFIX = "jianerbot-plugin-"
 PLUGIN_NAME_PATTERN = re.compile(r"^jianerbot-plugin-[a-z0-9]+(?:-[a-z0-9]+)*$")
-RESERVED_PLUGIN_NAMES = frozenset({"jianer-alconna"})
+RESERVED_PLUGIN_NAMES = frozenset()
 
 
 def is_valid_plugin_name(name: str) -> bool:

@@ -18,6 +18,8 @@ from .loader import DISABLED_PREFIX, PLUGIN_EXTENSIONS, PLUGIN_FOLDER, LoadResul
 from .metadata import PLUGIN_NAME_PREFIX, Plugin, PluginMetadata, is_valid_plugin_name
 
 BUILTIN_PLUGINS = {
+    "jianerbot-plugin-alconna": "jianer.plugins.builtin.alconna",
+    # Compatibility alias for plugins written before the canonical id was renamed.
     "jianer-alconna": "jianer.plugins.builtin.alconna",
 }
 

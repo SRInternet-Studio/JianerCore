@@ -1,4 +1,4 @@
-"""Tests for the built-in jianer-alconna plugin."""
+"""Tests for the built-in jianerbot-plugin-alconna plugin."""
 
 import asyncio
 import textwrap
@@ -38,11 +38,21 @@ def setup_function():
 def test_load_builtin_alconna_plugin():
     manager = PluginManager()
 
+    plugin = manager.load_plugin("jianerbot-plugin-alconna")
+
+    assert plugin is not None
+    assert plugin.name == "jianerbot-plugin-alconna"
+    assert manager.dependency_order == ["jianerbot-plugin-alconna"]
+
+
+def test_legacy_alconna_plugin_id_alias_loads_canonical_plugin():
+    manager = PluginManager()
+
     plugin = manager.load_plugin("jianer-alconna")
 
     assert plugin is not None
-    assert plugin.name == "jianer-alconna"
-    assert manager.dependency_order == ["jianer-alconna"]
+    assert plugin.name == "jianerbot-plugin-alconna"
+    assert manager.dependency_order == ["jianerbot-plugin-alconna"]
 
 
 def test_dependency_auto_loads_builtin_alconna(tmp_path):
@@ -53,7 +63,10 @@ def test_dependency_auto_loads_builtin_alconna(tmp_path):
         """
         from jianer.plugins import PluginMetadata
         from jianer.plugins.builtin.alconna import Command
-        __plugin_meta__ = PluginMetadata(name="jianerbot-plugin-echo", requires={"jianer-alconna"})
+        __plugin_meta__ = PluginMetadata(
+            name="jianerbot-plugin-echo",
+            requires={"jianerbot-plugin-alconna"},
+        )
 
         @Command("echo <text>").handle()
         async def _(text: str):
@@ -64,7 +77,7 @@ def test_dependency_auto_loads_builtin_alconna(tmp_path):
     result = PluginManager().load_plugins(plugins)
 
     assert result.failed == []
-    assert result.dependency_order == ["jianer-alconna", "jianerbot-plugin-echo"]
+    assert result.dependency_order == ["jianerbot-plugin-alconna", "jianerbot-plugin-echo"]
 
 
 def test_unimessage_to_common_message():
@@ -151,7 +164,10 @@ def test_client_load_plugins_registers_dispatchers(tmp_path):
         """
         from jianer.plugins import PluginMetadata
         from jianer.plugins.builtin.alconna import Command
-        __plugin_meta__ = PluginMetadata(name="jianerbot-plugin-echo", requires={"jianer-alconna"})
+        __plugin_meta__ = PluginMetadata(
+            name="jianerbot-plugin-echo",
+            requires={"jianerbot-plugin-alconna"},
+        )
 
         @Command("echo <text>").handle()
         async def _(text: str):
@@ -177,7 +193,7 @@ def test_manual_plugin_manager_dispatch():
         await UniMessage.text(text).send()
 
     manager = PluginManager()
-    manager.load_plugin("jianer-alconna")
+    manager.load_plugin("jianerbot-plugin-alconna")
     handled = asyncio.run(manager.dispatch(event, actions))
 
     assert handled is True

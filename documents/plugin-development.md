@@ -1,6 +1,6 @@
 # JianerCore 插件开发指南
 
-本文面向 JianerCore 当前的新式插件系统。新式插件以 `PluginMetadata` 为入口，支持插件之间声明依赖，并可以使用内置的 `jianer-alconna` 插件完成统一消息接收、命令解析和消息发送。
+本文面向 JianerCore 当前的新式插件系统。新式插件以 `PluginMetadata` 为入口，支持插件之间声明依赖，并可以使用内置的 `jianerbot-plugin-alconna` 插件完成统一消息接收、命令解析和消息发送。
 
 ## 插件系统分层
 
@@ -28,7 +28,7 @@ jianerbot-plugin-aichat
 jianerbot-plugin-ai-chat
 ```
 
-`jianer-alconna` 是 JianerCore 内置插件 ID，是命名规则的保留例外。
+内置 Alconna 插件也遵循同一命名规则，插件 ID 是 `jianerbot-plugin-alconna`。旧 ID `jianer-alconna` 只作为过渡加载别名保留。
 
 ## 最小插件
 
@@ -48,7 +48,7 @@ from jianer.plugins.builtin.alconna import Command, UniMessage
 __plugin_meta__ = PluginMetadata(
     name="jianerbot-plugin-ping",
     description="Reply pong when receiving ping.",
-    requires={"jianer-alconna"},
+    requires={"jianerbot-plugin-alconna"},
 )
 
 
@@ -67,7 +67,10 @@ async def _():
 from jianer.plugins import PluginMetadata
 from jianer.plugins.builtin.alconna import Command, UniMessage
 
-__plugin_meta__ = PluginMetadata(name="jianerbot-plugin-echo", requires={"jianer-alconna"})
+__plugin_meta__ = PluginMetadata(
+    name="jianerbot-plugin-echo",
+    requires={"jianerbot-plugin-alconna"},
+)
 
 
 @Command("echo <text>").handle()
@@ -94,7 +97,10 @@ from arclet.alconna import Alconna, Args, Option
 from jianer.plugins import PluginMetadata
 from jianer.plugins.builtin.alconna import Command, UniMessage
 
-__plugin_meta__ = PluginMetadata(name="jianerbot-plugin-ban-command", requires={"jianer-alconna"})
+__plugin_meta__ = PluginMetadata(
+    name="jianerbot-plugin-ban-command",
+    requires={"jianerbot-plugin-alconna"},
+)
 
 ban = Alconna("ban", Args["user", str], Option("--reason", Args["reason", str]))
 
@@ -112,7 +118,10 @@ async def _(user: str, reason: str):
 from jianer.plugins import PluginMetadata
 from jianer.plugins.builtin.alconna import Command, UniMessage
 
-__plugin_meta__ = PluginMetadata(name="jianerbot-plugin-whoami", requires={"jianer-alconna"})
+__plugin_meta__ = PluginMetadata(
+    name="jianerbot-plugin-whoami",
+    requires={"jianerbot-plugin-alconna"},
+)
 
 
 @Command("whoami").handle()
@@ -163,7 +172,7 @@ from jianer.plugins import PluginMetadata
 
 __plugin_meta__ = PluginMetadata(
     name="jianerbot-plugin-main",
-    requires={"jianerbot-plugin-base", "jianer-alconna"},
+    requires={"jianerbot-plugin-base", "jianerbot-plugin-alconna"},
 )
 ```
 
@@ -202,7 +211,7 @@ plugins/
 
 ## 自定义 dispatch 插件
 
-如果不使用 `jianer-alconna`，插件也可以自己暴露 `dispatch(event, actions)`：
+如果不使用 `jianerbot-plugin-alconna`，插件也可以自己暴露 `dispatch(event, actions)`：
 
 ```python
 from jianer.plugins import PluginMetadata
