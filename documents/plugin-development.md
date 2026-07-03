@@ -16,10 +16,19 @@ JianerCore 现在有两套加载入口：
 ```python
 from jianer.plugins import PluginMetadata
 
-__plugin_meta__ = PluginMetadata(name="my-plugin")
+__plugin_meta__ = PluginMetadata(name="jianerbot-plugin-my-plugin")
 ```
 
 `name` 是插件 ID。两个插件使用同一个 `name` 会加载失败。
+
+第三方新式插件的 `name` 统一使用 `jianerbot-plugin-{名字}`：
+
+```text
+jianerbot-plugin-aichat
+jianerbot-plugin-ai-chat
+```
+
+`jianer-alconna` 是 JianerCore 内置插件 ID，是命名规则的保留例外。
 
 ## 最小插件
 
@@ -37,7 +46,7 @@ from jianer.plugins import PluginMetadata
 from jianer.plugins.builtin.alconna import Command, UniMessage
 
 __plugin_meta__ = PluginMetadata(
-    name="ping",
+    name="jianerbot-plugin-ping",
     description="Reply pong when receiving ping.",
     requires={"jianer-alconna"},
 )
@@ -58,7 +67,7 @@ async def _():
 from jianer.plugins import PluginMetadata
 from jianer.plugins.builtin.alconna import Command, UniMessage
 
-__plugin_meta__ = PluginMetadata(name="echo", requires={"jianer-alconna"})
+__plugin_meta__ = PluginMetadata(name="jianerbot-plugin-echo", requires={"jianer-alconna"})
 
 
 @Command("echo <text>").handle()
@@ -85,7 +94,7 @@ from arclet.alconna import Alconna, Args, Option
 from jianer.plugins import PluginMetadata
 from jianer.plugins.builtin.alconna import Command, UniMessage
 
-__plugin_meta__ = PluginMetadata(name="ban-command", requires={"jianer-alconna"})
+__plugin_meta__ = PluginMetadata(name="jianerbot-plugin-ban-command", requires={"jianer-alconna"})
 
 ban = Alconna("ban", Args["user", str], Option("--reason", Args["reason", str]))
 
@@ -103,7 +112,7 @@ async def _(user: str, reason: str):
 from jianer.plugins import PluginMetadata
 from jianer.plugins.builtin.alconna import Command, UniMessage
 
-__plugin_meta__ = PluginMetadata(name="whoami", requires={"jianer-alconna"})
+__plugin_meta__ = PluginMetadata(name="jianerbot-plugin-whoami", requires={"jianer-alconna"})
 
 
 @Command("whoami").handle()
@@ -153,8 +162,8 @@ if receipt.message_id is not None:
 from jianer.plugins import PluginMetadata
 
 __plugin_meta__ = PluginMetadata(
-    name="main-plugin",
-    requires={"base-plugin", "jianer-alconna"},
+    name="jianerbot-plugin-main",
+    requires={"jianerbot-plugin-base", "jianer-alconna"},
 )
 ```
 
@@ -198,7 +207,7 @@ plugins/
 ```python
 from jianer.plugins import PluginMetadata
 
-__plugin_meta__ = PluginMetadata(name="raw-dispatch")
+__plugin_meta__ = PluginMetadata(name="jianerbot-plugin-raw-dispatch")
 
 
 async def dispatch(event, actions):

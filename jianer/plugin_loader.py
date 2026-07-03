@@ -6,10 +6,14 @@ from .plugins import (
     INCOMPATIBLE_IN_FEISHU,
     PLUGIN_EXTENSIONS,
     PLUGIN_FOLDER,
+    PLUGIN_NAME_PATTERN,
+    PLUGIN_NAME_PREFIX,
+    RESERVED_PLUGIN_NAMES,
     LoadResult,
     Plugin,
     PluginManager,
     PluginMetadata,
+    is_valid_plugin_name,
     load_plugins,
 )
 
@@ -19,9 +23,13 @@ __all__ = [
     "INCOMPATIBLE_IN_FEISHU",
     "PLUGIN_EXTENSIONS",
     "PLUGIN_FOLDER",
+    "PLUGIN_NAME_PATTERN",
+    "PLUGIN_NAME_PREFIX",
+    "RESERVED_PLUGIN_NAMES",
     "LoadResult",
     "Plugin",
     "PluginManager",
     "PluginMetadata",
+    "is_valid_plugin_name",
     "load_plugins",
 ]

@@ -15,7 +15,7 @@ from types import ModuleType
 from typing import Any
 
 from .loader import DISABLED_PREFIX, PLUGIN_EXTENSIONS, PLUGIN_FOLDER, LoadResult
-from .metadata import Plugin, PluginMetadata
+from .metadata import PLUGIN_NAME_PREFIX, Plugin, PluginMetadata, is_valid_plugin_name
 
 BUILTIN_PLUGINS = {
     "jianer-alconna": "jianer.plugins.builtin.alconna",
@@ -55,7 +55,7 @@ class PluginManager:
         self.warnings: list[str] = []
         self.failed: list[str] = []
         self._candidates: dict[str, _PluginCandidate] = {}
-        self._invalid_plugin_ids: set[str] = set()
+        self._invalid_plugin_reasons: dict[str, str] = {}
         self._loading: set[str] = set()
 
     def load_plugins(
@@ -201,10 +201,15 @@ class PluginManager:
         plugin_id = candidate.plugin_id
         if plugin_id is None:
             return
+        if not is_valid_plugin_name(plugin_id):
+            reason = f"{plugin_id} (invalid plugin ID: use {PLUGIN_NAME_PREFIX}{{name}})"
+            self._fail(reason)
+            self._invalid_plugin_reasons[plugin_id] = reason
+            return
         existing = self._candidates.get(plugin_id)
         if existing and str(existing.source) != str(candidate.source):
             self._fail(f"{plugin_id} (duplicate plugin ID: {existing.source} and {candidate.source})")
-            self._invalid_plugin_ids.add(plugin_id)
+            self._invalid_plugin_reasons[plugin_id] = f"{plugin_id} (duplicate plugin ID)"
             return
         self._candidates[plugin_id] = candidate
 
@@ -214,8 +219,9 @@ class PluginManager:
         candidate: _PluginCandidate,
         stack: list[str],
     ) -> Plugin | None:
-        if plugin_id in self._invalid_plugin_ids:
-            self._fail(f"{plugin_id} (duplicate plugin ID)")
+        invalid_reason = self._invalid_plugin_reasons.get(plugin_id)
+        if invalid_reason is not None:
+            self._fail(invalid_reason)
             return None
         if plugin_id in self.plugins:
             return self.plugins[plugin_id]
@@ -249,6 +255,9 @@ class PluginManager:
         runtime_metadata = getattr(module, "__plugin_meta__", metadata)
         if not isinstance(runtime_metadata, PluginMetadata):
             self._fail(f"{plugin_id} (__plugin_meta__ must be PluginMetadata)")
+            return None
+        if not is_valid_plugin_name(runtime_metadata.name):
+            self._fail(f"{runtime_metadata.name} (invalid plugin ID: use {PLUGIN_NAME_PREFIX}{{name}})")
             return None
         if runtime_metadata.name != plugin_id:
             self._fail(f"{plugin_id} (plugin ID mismatch: {runtime_metadata.name})")

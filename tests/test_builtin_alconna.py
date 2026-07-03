@@ -53,7 +53,7 @@ def test_dependency_auto_loads_builtin_alconna(tmp_path):
         """
         from jianer.plugins import PluginMetadata
         from jianer.plugins.builtin.alconna import Command
-        __plugin_meta__ = PluginMetadata(name="echo", requires={"jianer-alconna"})
+        __plugin_meta__ = PluginMetadata(name="jianerbot-plugin-echo", requires={"jianer-alconna"})
 
         @Command("echo <text>").handle()
         async def _(text: str):
@@ -64,7 +64,7 @@ def test_dependency_auto_loads_builtin_alconna(tmp_path):
     result = PluginManager().load_plugins(plugins)
 
     assert result.failed == []
-    assert result.dependency_order == ["jianer-alconna", "echo"]
+    assert result.dependency_order == ["jianer-alconna", "jianerbot-plugin-echo"]
 
 
 def test_unimessage_to_common_message():
@@ -151,7 +151,7 @@ def test_client_load_plugins_registers_dispatchers(tmp_path):
         """
         from jianer.plugins import PluginMetadata
         from jianer.plugins.builtin.alconna import Command
-        __plugin_meta__ = PluginMetadata(name="echo", requires={"jianer-alconna"})
+        __plugin_meta__ = PluginMetadata(name="jianerbot-plugin-echo", requires={"jianer-alconna"})
 
         @Command("echo <text>").handle()
         async def _(text: str):

@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from types import ModuleType
 from typing import Any
+
+PLUGIN_NAME_PREFIX = "jianerbot-plugin-"
+PLUGIN_NAME_PATTERN = re.compile(r"^jianerbot-plugin-[a-z0-9]+(?:-[a-z0-9]+)*$")
+RESERVED_PLUGIN_NAMES = frozenset({"jianer-alconna"})
+
+
+def is_valid_plugin_name(name: str) -> bool:
+    """Return whether a new-style plugin id follows the JianerBot convention."""
+
+    return name in RESERVED_PLUGIN_NAMES or bool(PLUGIN_NAME_PATTERN.fullmatch(name))
 
 
 @dataclass(frozen=True)
