@@ -25,6 +25,7 @@ logger = hyperogger.Logger()
 logger.set_level(config.log_level if config else "INFO")
 listener_ran = False
 MILKY_TEXT_CHUNK_LIMIT = 1800
+MILKY_TEXT_RECOVERY_CHUNK_LIMIT = 400
 
 
 def _fetch_ret(packet: Packet, serializer=ObjectedJson) -> common.Ret:
@@ -95,7 +96,12 @@ class Actions:
         return chunks or [text]
 
     @staticmethod
-    def _text_chunk_payloads(payload: dict, *, keep_reply: bool = True) -> list[dict] | None:
+    def _text_chunk_payloads(
+        payload: dict,
+        *,
+        keep_reply: bool = True,
+        limit: int = MILKY_TEXT_CHUNK_LIMIT,
+    ) -> list[dict] | None:
         message = payload.get("message")
         if not isinstance(message, list):
             return None
@@ -117,7 +123,7 @@ class Actions:
             text_parts.append(str(data.get("text", "")))
 
         text = "".join(text_parts)
-        chunks = Actions._split_text(text)
+        chunks = Actions._split_text(text, limit)
         if len(chunks) <= 1:
             return None
 
@@ -132,10 +138,12 @@ class Actions:
             payloads.append(chunk_payload)
         return payloads
 
-    def _send_text_chunks(self, endpoint: str, payloads: list[dict]) -> tuple[Packet, dict]:
+    def _send_text_chunks(self, endpoint: str, payloads: list[dict], *, interval: float = 0) -> tuple[Packet, dict]:
         packet: Packet = None
         res: dict = {}
-        for payload in payloads:
+        for index, payload in enumerate(payloads):
+            if interval > 0 and index > 0:
+                time.sleep(interval)
             packet = Packet(endpoint, **payload)
             res = packet.send_to(self.connection)
             if not self._is_successful_response(res):
@@ -206,6 +214,27 @@ class Actions:
             if self._is_successful_response(fallback_res):
                 packet = fallback_packet
                 res = fallback_res
+
+        if not self._is_successful_response(res):
+            recovery_payload = payload.copy()
+            recovery_payload["message"] = [i for i in outgoing if i.get("type") != "reply"] or [make_text_segment("")]
+            recovery_chunk_payloads = self._text_chunk_payloads(
+                recovery_payload,
+                keep_reply=False,
+                limit=MILKY_TEXT_RECOVERY_CHUNK_LIMIT,
+            )
+            if recovery_chunk_payloads is not None:
+                logger.warning(
+                    f"Milky text send failed; retrying as {len(recovery_chunk_payloads)} smaller chunks"
+                )
+                recovery_packet, recovery_res = self._send_text_chunks(
+                    endpoint,
+                    recovery_chunk_payloads,
+                    interval=0.2,
+                )
+                if self._is_successful_response(recovery_res):
+                    packet = recovery_packet
+                    res = recovery_res
 
         if not self._is_successful_response(res):
             logger.error(f"Milky send failed via {packet.endpoint}: {res}")

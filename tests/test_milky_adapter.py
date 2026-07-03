@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from jianer import common, segments
-from jianer.LecAdapters.Milky import MILKY_TEXT_CHUNK_LIMIT, Actions
+from jianer.LecAdapters.Milky import MILKY_TEXT_CHUNK_LIMIT, MILKY_TEXT_RECOVERY_CHUNK_LIMIT, Actions
 from jianer.LecAdapters.MilkyLib.Manager import Packet, reports
 from jianer.LecAdapters.MilkyLib.translator import (
     MilkyHttpConnection,
@@ -185,6 +185,44 @@ def test_milky_send_splits_long_reply_text(monkeypatch):
     assert calls[0][1]["message"][0] == {"type": "reply", "data": {"message_seq": 123}}
     assert calls[0][1]["message"][1]["type"] == "text"
     assert calls[1][1]["message"][0]["type"] == "text"
+
+
+def test_milky_send_retries_failed_text_as_smaller_chunks(monkeypatch):
+    connection = MilkyHttpConnection("ws://127.0.0.1:3000")
+    calls = []
+
+    def fake_http_send(endpoint, data):
+        calls.append((endpoint, data))
+        sent_text = "".join(
+            segment["data"].get("text", "")
+            for segment in data["message"]
+            if segment["type"] == "text"
+        )
+        if len(calls) == 1:
+            return {
+                "status": "failed",
+                "retcode": 502,
+                "msg": "Non-JSON response from /api/send_group_message",
+                "data": {"http_status": 502, "raw": ""},
+            }
+        assert len(sent_text) <= MILKY_TEXT_RECOVERY_CHUNK_LIMIT
+        return {"status": "ok", "retcode": 0, "data": {"message_seq": len(calls)}}
+
+    monkeypatch.setattr(connection, "http_send", fake_http_send)
+    monkeypatch.setattr("jianer.LecAdapters.Milky.time.sleep", lambda seconds: None)
+    actions = Actions(connection)
+
+    response = asyncio.run(actions.send("c" * (MILKY_TEXT_RECOVERY_CHUNK_LIMIT + 20), group_id=10001))
+
+    assert response.ret_code == 0
+    assert [call[0] for call in calls] == [
+        "send_group_message",
+        "send_group_message",
+        "send_group_message",
+    ]
+    assert "".join(call[1]["message"][0]["data"]["text"] for call in calls[1:]) == "c" * (
+        MILKY_TEXT_RECOVERY_CHUNK_LIMIT + 20
+    )
 
 
 def test_milky_http_send_retries_transient_non_json_502(monkeypatch):
