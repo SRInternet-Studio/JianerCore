@@ -84,23 +84,31 @@ def test_milky_prepare_outgoing_media_uri_keeps_remote_urls():
     assert prepare_outgoing_media_uri("https://example.test/file.png") == "https://example.test/file.png"
 
 
-def test_milky_image_segment_inlines_local_file_as_base64(tmp_path):
+def test_milky_prepare_outgoing_media_uri_keeps_explicit_base64():
+    assert prepare_outgoing_media_uri("base64://dGVzdC1pbWFnZQ==") == "base64://dGVzdC1pbWFnZQ=="
+
+
+def test_milky_image_segment_uses_local_file_uri(tmp_path):
     image = tmp_path / "image.bin"
     image.write_bytes(b"test-image")
 
     segment = MilkyOutGoingSegBuilder().image(str(image)).build()[0]
 
-    assert segment["data"]["uri"] == "base64://dGVzdC1pbWFnZQ=="
+    assert segment["data"]["uri"].startswith("file:///")
+    assert segment["data"]["uri"].endswith("/image.bin")
+    assert not segment["data"]["uri"].startswith("base64://")
 
 
-def test_milky_image_segment_inlines_bare_local_filename(tmp_path, monkeypatch):
+def test_milky_image_segment_uses_bare_local_filename_uri(tmp_path, monkeypatch):
     image = tmp_path / "image.bin"
     image.write_bytes(b"test-image")
     monkeypatch.chdir(tmp_path)
 
     segment = MilkyOutGoingSegBuilder().image("image.bin").build()[0]
 
-    assert segment["data"]["uri"] == "base64://dGVzdC1pbWFnZQ=="
+    assert segment["data"]["uri"].startswith("file:///")
+    assert segment["data"]["uri"].endswith("/image.bin")
+    assert not segment["data"]["uri"].startswith("base64://")
 
 
 def test_milky_image_segment_rejects_missing_local_file():

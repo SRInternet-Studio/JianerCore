@@ -1,4 +1,3 @@
-import base64
 import json
 import os
 import time
@@ -85,6 +84,15 @@ def _local_path_from_file_uri(uri: str) -> str:
     return path
 
 
+def _file_uri_from_local_path(path: str) -> str:
+    uri_path = os.path.abspath(path).replace("\\", "/")
+    while "//" in uri_path:
+        uri_path = uri_path.replace("//", "/")
+    if not uri_path.startswith("/"):
+        uri_path = "/" + uri_path
+    return f"file://{uri_path}"
+
+
 def prepare_outgoing_media_uri(uri: Optional[str]) -> Optional[str]:
     normalized = normalize_uri(uri)
     if normalized is None:
@@ -103,9 +111,7 @@ def prepare_outgoing_media_uri(uri: Optional[str]) -> Optional[str]:
     if not os.path.isfile(path):
         raise FileNotFoundError(f"Milky media file does not exist: {path}")
 
-    with open(path, "rb") as media_file:
-        encoded = base64.b64encode(media_file.read()).decode("ascii")
-    return f"base64://{encoded}"
+    return _file_uri_from_local_path(path)
 
 
 def message_translator(milky_message: list[MilkySegment], peer_id: int, scene: int = 0) -> list[dict]:
