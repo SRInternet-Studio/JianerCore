@@ -2,7 +2,8 @@ import asyncio
 
 import pytest
 
-from jianer.LecAdapters.Milky import Actions
+from jianer import common, segments
+from jianer.LecAdapters.Milky import MILKY_TEXT_CHUNK_LIMIT, Actions
 from jianer.LecAdapters.MilkyLib.Manager import Packet, reports
 from jianer.LecAdapters.MilkyLib.translator import (
     MilkyHttpConnection,
@@ -118,6 +119,72 @@ def test_milky_send_raises_when_api_rejects(monkeypatch):
 
     with pytest.raises(errors.ActionFailedError, match="Milky send failed"):
         asyncio.run(actions.send("hello", group_id=10001))
+
+
+def test_milky_send_plain_text_returns_response(monkeypatch):
+    connection = MilkyHttpConnection("ws://127.0.0.1:3000")
+    calls = []
+
+    def fake_http_send(endpoint, data):
+        calls.append((endpoint, data))
+        return {"status": "ok", "retcode": 0, "data": {"message_seq": 1}}
+
+    monkeypatch.setattr(connection, "http_send", fake_http_send)
+    actions = Actions(connection)
+
+    response = asyncio.run(actions.send("hello", group_id=10001))
+
+    assert response.ret_code == 0
+    assert calls == [
+        (
+            "send_group_message",
+            {"group_id": 10001, "message": [{"type": "text", "data": {"text": "hello"}}]},
+        )
+    ]
+
+
+def test_milky_send_splits_long_text(monkeypatch):
+    connection = MilkyHttpConnection("ws://127.0.0.1:3000")
+    calls = []
+
+    def fake_http_send(endpoint, data):
+        calls.append((endpoint, data))
+        sent_text = data["message"][0]["data"]["text"]
+        assert len(sent_text) <= MILKY_TEXT_CHUNK_LIMIT
+        return {"status": "ok", "retcode": 0, "data": {"message_seq": len(calls)}}
+
+    monkeypatch.setattr(connection, "http_send", fake_http_send)
+    actions = Actions(connection)
+
+    asyncio.run(actions.send("a" * (MILKY_TEXT_CHUNK_LIMIT + 10), group_id=10001))
+
+    assert [call[0] for call in calls] == ["send_group_message", "send_group_message"]
+    assert "".join(call[1]["message"][0]["data"]["text"] for call in calls) == "a" * (
+        MILKY_TEXT_CHUNK_LIMIT + 10
+    )
+
+
+def test_milky_send_splits_long_reply_text(monkeypatch):
+    connection = MilkyHttpConnection("ws://127.0.0.1:3000")
+    calls = []
+
+    def fake_http_send(endpoint, data):
+        calls.append((endpoint, data))
+        return {"status": "ok", "retcode": 0, "data": {"message_seq": len(calls)}}
+
+    monkeypatch.setattr(connection, "http_send", fake_http_send)
+    actions = Actions(connection)
+    message = common.Message(
+        segments.Reply("123"),
+        segments.Text("b" * (MILKY_TEXT_CHUNK_LIMIT + 10)),
+    )
+
+    asyncio.run(actions.send(message, group_id=10001))
+
+    assert len(calls) == 2
+    assert calls[0][1]["message"][0] == {"type": "reply", "data": {"message_seq": 123}}
+    assert calls[0][1]["message"][1]["type"] == "text"
+    assert calls[1][1]["message"][0]["type"] == "text"
 
 
 def test_milky_http_send_retries_transient_non_json_502(monkeypatch):

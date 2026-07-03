@@ -9,14 +9,26 @@ from ..events import *
 from ..utils import errors
 from ..utils.apiresponse import *
 from ..utils.hypetyping import Any, NoReturn, Union
-from .MilkyLib.Manager import Packet
+from ..utils.typextensions import ObjectedJson
+from .MilkyLib.Manager import Packet, reports
 from .MilkyLib.translator import MilkyHttpConnection, message_translator, msg_deid, msg_enid
-from .MilkyLib.types import MilkyOutgoingSegment, consume_segment, consume_segments, make_text_segment
+from .MilkyLib.types import (
+    MilkyOutgoingSegment,
+    consume_segment,
+    consume_segments,
+    make_reply_segment,
+    make_text_segment,
+)
 
 config = configurator.BotConfig.get("jianer-bot")
 logger = hyperogger.Logger()
 logger.set_level(config.log_level if config else "INFO")
 listener_ran = False
+MILKY_TEXT_CHUNK_LIMIT = 1800
+
+
+def _fetch_ret(packet: Packet, serializer=ObjectedJson) -> common.Ret:
+    return common.Ret(reports.get(packet.echo), serializer)
 
 
 class Actions:
@@ -58,6 +70,94 @@ class Actions:
             last_res = res if isinstance(res, dict) else {}
         return last_packet, last_res
 
+    @staticmethod
+    def _split_text(text: str, limit: int = MILKY_TEXT_CHUNK_LIMIT) -> list[str]:
+        if len(text) <= limit:
+            return [text]
+
+        chunks: list[str] = []
+        current = ""
+        for line in text.splitlines(keepends=True):
+            if len(line) > limit:
+                if current:
+                    chunks.append(current)
+                    current = ""
+                for index in range(0, len(line), limit):
+                    chunks.append(line[index:index + limit])
+                continue
+            if current and len(current) + len(line) > limit:
+                chunks.append(current)
+                current = line
+            else:
+                current += line
+        if current:
+            chunks.append(current)
+        return chunks or [text]
+
+    @staticmethod
+    def _text_chunk_payloads(payload: dict, *, keep_reply: bool = True) -> list[dict] | None:
+        message = payload.get("message")
+        if not isinstance(message, list):
+            return None
+
+        reply_segment = None
+        text_parts: list[str] = []
+        for segment in message:
+            if not isinstance(segment, dict):
+                return None
+            segment_type = segment.get("type")
+            data = segment.get("data")
+            if segment_type == "reply":
+                if reply_segment is not None:
+                    return None
+                reply_segment = segment
+                continue
+            if segment_type != "text" or not isinstance(data, dict):
+                return None
+            text_parts.append(str(data.get("text", "")))
+
+        text = "".join(text_parts)
+        chunks = Actions._split_text(text)
+        if len(chunks) <= 1:
+            return None
+
+        payloads: list[dict] = []
+        for index, chunk in enumerate(chunks):
+            chunk_payload = payload.copy()
+            chunk_message = []
+            if index == 0 and keep_reply and reply_segment is not None:
+                chunk_message.append(reply_segment)
+            chunk_message.append(make_text_segment(chunk))
+            chunk_payload["message"] = chunk_message
+            payloads.append(chunk_payload)
+        return payloads
+
+    def _send_text_chunks(self, endpoint: str, payloads: list[dict]) -> tuple[Packet, dict]:
+        packet: Packet = None
+        res: dict = {}
+        for payload in payloads:
+            packet = Packet(endpoint, **payload)
+            res = packet.send_to(self.connection)
+            if not self._is_successful_response(res):
+                return packet, res if isinstance(res, dict) else {}
+        return packet, res
+
+    @staticmethod
+    def _segment_to_outgoing(seg: Any) -> MilkyOutgoingSegment:
+        if hasattr(seg, "milky_outgoing_seg"):
+            outgoing_seg = consume_segment(seg.milky_outgoing_seg())
+            if outgoing_seg is not None:
+                return outgoing_seg
+
+        class_name = seg.__class__.__name__.casefold()
+        if hasattr(seg, "text"):
+            return make_text_segment(str(getattr(seg, "text")))
+        if class_name == "reply" and hasattr(seg, "id"):
+            message_id = int(getattr(seg, "id"))
+            message_seq = msg_deid(message_id)[1] if message_id >= (1 << 64) else message_id
+            return make_reply_segment(message_seq)
+        return make_text_segment(str(seg))
+
     async def send(
             self, message: Union[common.Message, str], group_id: int = None, user_id: int = None
     ) -> common.Ret[MsgSendRsp]:
@@ -67,11 +167,7 @@ class Actions:
         outgoing: list[MilkyOutgoingSegment] = []
         for seg in message:
             try:
-                if hasattr(seg, "milky_outgoing_seg"):
-                    outgoing_seg = consume_segment(seg.milky_outgoing_seg())
-                    outgoing.append(outgoing_seg if outgoing_seg is not None else make_text_segment(str(seg)))
-                else:
-                    outgoing.append(make_text_segment(str(seg)))
+                outgoing.append(self._segment_to_outgoing(seg))
             except (FileNotFoundError, OSError, ValueError) as exc:
                 raise errors.ArgsInvalidError(f"Invalid Milky outgoing segment {seg}: {exc}") from exc
 
@@ -88,14 +184,25 @@ class Actions:
         else:
             raise errors.ArgsInvalidError("'send' API requires 'group_id' or 'user_id' but none of them are provided.")
 
-        packet = Packet(endpoint, **payload)
-        res = packet.send_to(self.connection)
+        chunk_payloads = self._text_chunk_payloads(payload)
+        if chunk_payloads is not None:
+            logger.warning(f"Milky text message is too long; split into {len(chunk_payloads)} chunks")
+            packet, res = self._send_text_chunks(endpoint, chunk_payloads)
+        else:
+            packet = Packet(endpoint, **payload)
+            res = packet.send_to(self.connection)
+
         if (not self._is_successful_response(res)) and any(i.get("type") == "reply" for i in outgoing):
             fallback_outgoing = [i for i in outgoing if i.get("type") != "reply"] or [make_text_segment("")]
             fallback_payload = payload.copy()
             fallback_payload["message"] = fallback_outgoing
-            fallback_packet = Packet(endpoint, **fallback_payload)
-            fallback_res = fallback_packet.send_to(self.connection)
+            fallback_chunk_payloads = self._text_chunk_payloads(fallback_payload, keep_reply=False)
+            if fallback_chunk_payloads is not None:
+                logger.warning(f"Milky reply fallback text is too long; split into {len(fallback_chunk_payloads)} chunks")
+                fallback_packet, fallback_res = self._send_text_chunks(endpoint, fallback_chunk_payloads)
+            else:
+                fallback_packet = Packet(endpoint, **fallback_payload)
+                fallback_res = fallback_packet.send_to(self.connection)
             if self._is_successful_response(fallback_res):
                 packet = fallback_packet
                 res = fallback_res
@@ -115,7 +222,7 @@ class Actions:
 
         target = f"group {group_id}" if group_id is not None else f"user {user_id}"
         logger.info(f"Sent message to {target}: {message}")
-        return common.Ret.fetch(packet.echo, MsgSendRsp)
+        return _fetch_ret(packet, MsgSendRsp)
 
     async def del_message(self, message_id: int) -> None:
         enid = int(message_id)
@@ -151,7 +258,7 @@ class Actions:
     async def get_login_info(self) -> common.Ret[GetLoginInfoRsp]:
         packet = Packet("get_login_info")
         packet.send_to(self.connection)
-        return common.Ret.fetch(packet.echo, GetLoginInfoRsp)
+        return _fetch_ret(packet, GetLoginInfoRsp)
 
     async def get_version_info(self) -> common.Ret[GetVerInfoRsp]:
         packet = Packet("get_impl_info")
@@ -161,7 +268,7 @@ class Actions:
             data["app_name"] = data.get("impl_name", "")
             data["app_version"] = data.get("impl_version", "")
             data["protocol_version"] = data.get("milky_version", "")
-        return common.Ret.fetch(packet.echo, GetVerInfoRsp)
+        return _fetch_ret(packet, GetVerInfoRsp)
 
     async def send_forward_msg(self, message: common.Message) -> common.Ret[SendForwardRsp]:
         ...
@@ -193,22 +300,22 @@ class Actions:
                 data["age"] = int(data.get("age") or data.get("qage") or data.get("qq_age") or 0)
             except (TypeError, ValueError):
                 data["age"] = 0
-        return common.Ret.fetch(packet.echo, GetStrInfoRsp)
+        return _fetch_ret(packet, GetStrInfoRsp)
 
     async def get_group_member_info(self, group_id: int, user_id: int) -> common.Ret[GetGrpMemInfoRsp]:
         packet = Packet("get_group_member_info", group_id=group_id, user_id=user_id)
         packet.send_to(self.connection)
-        return common.Ret.fetch(packet.echo, GetGrpMemInfoRsp)
+        return _fetch_ret(packet, GetGrpMemInfoRsp)
 
     async def get_group_info(self, group_id: int) -> common.Ret[GetGrpInfoRsp]:
         packet = Packet("get_group_info", group_id=group_id)
         packet.send_to(self.connection)
-        return common.Ret.fetch(packet.echo, GetGrpInfoRsp)
+        return _fetch_ret(packet, GetGrpInfoRsp)
 
     async def get_status(self) -> common.Ret:
         packet = Packet("get_status")
         packet.send_to(self.connection)
-        return common.Ret.fetch(packet.echo)
+        return _fetch_ret(packet)
 
     async def set_essence_msg(self, message_id: int) -> None:
         enid = int(message_id)
@@ -273,7 +380,7 @@ class Actions:
         packet, res = self._send_with_payload_fallback(req_calls)
         if isinstance(res, dict) and isinstance(res.get("data"), dict):
             self._normalize_get_msg_data(res["data"])
-        return common.Ret.fetch(packet.echo, GetMsgRsp)
+        return _fetch_ret(packet, GetMsgRsp)
 
     @staticmethod
     def _normalize_get_msg_data(data: dict) -> None:
