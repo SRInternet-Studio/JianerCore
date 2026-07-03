@@ -6,7 +6,7 @@ import asyncio
 import sys
 import os
 
-JIANER_BOT_VERSION = "0.90.0"
+JIANER_BOT_VERSION = "0.90.1"
 
 # listener = None
 
