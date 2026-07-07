@@ -1,9 +1,8 @@
 import asyncio
 
-import pytest
-
-from jianer import common, segments
-from jianer.LecAdapters.Milky import MILKY_TEXT_CHUNK_LIMIT, MILKY_TEXT_RECOVERY_CHUNK_LIMIT, Actions
+from jianer import common
+from jianer.LecAdapters.Milky import Actions
+from jianer.LecAdapters.MilkyLib import translator
 from jianer.LecAdapters.MilkyLib.Manager import Packet, reports
 from jianer.LecAdapters.MilkyLib.translator import (
     MilkyHttpConnection,
@@ -11,11 +10,19 @@ from jianer.LecAdapters.MilkyLib.translator import (
     message_translator,
     msg_enid,
     normalize_uri,
-    prepare_outgoing_media_uri,
 )
-from jianer.LecAdapters.MilkyLib import translator
-from jianer.LecAdapters.MilkyLib.types import consume_milky_event
-from jianer.utils import errors
+from jianer.LecAdapters.MilkyLib.types import consume_milky_event, make_reply_segment, make_text_segment
+
+
+class _MilkySegment:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def milky_outgoing_seg(self):
+        return self.payload
+
+    def __str__(self):
+        return str(self.payload)
 
 
 def test_milky_message_translator_accepts_common_field_variants():
@@ -25,6 +32,7 @@ def test_milky_message_translator_accepts_common_field_variants():
             {"type": "image", "data": {"url": "https://example.test/a.png"}},
             {"type": "mention", "data": {"user_id": 10001}},
             {"type": "reply", "data": {"message_seq": 42}},
+            {"type": "forward", "data": {"id": "forward-1"}},
         ],
         peer_id=20002,
         scene=1,
@@ -37,6 +45,7 @@ def test_milky_message_translator_accepts_common_field_variants():
         "type": "reply",
         "data": {"id": str(msg_enid(1, 42, 20002))},
     }
+    assert message[4] == {"type": "forward", "data": {"id": "forward-1"}}
 
 
 def test_milky_event_can_be_unwrapped_from_body_packet():
@@ -74,59 +83,25 @@ def test_milky_normalize_uri_keeps_remote_urls():
     assert normalize_uri("https://example.test/file.png") == "https://example.test/file.png"
 
 
-def test_milky_normalize_uri_fixes_windows_file_urls():
-    assert normalize_uri("file://D:\\SRInternet.SR\\JianerCore\\ban.png") == (
+def test_milky_normalize_uri_handles_windows_drive_paths():
+    assert normalize_uri("D:\\SRInternet.SR\\JianerCore\\ban.png") == (
         "file:///D:/SRInternet.SR/JianerCore/ban.png"
     )
 
 
-def test_milky_prepare_outgoing_media_uri_keeps_remote_urls():
-    assert prepare_outgoing_media_uri("https://example.test/file.png") == "https://example.test/file.png"
+def test_milky_normalize_uri_keeps_bare_names_for_milky_resolution():
+    assert normalize_uri("image.bin") == "image.bin"
 
 
-def test_milky_prepare_outgoing_media_uri_keeps_explicit_base64():
-    assert prepare_outgoing_media_uri("base64://dGVzdC1pbWFnZQ==") == "base64://dGVzdC1pbWFnZQ=="
-
-
-def test_milky_image_segment_uses_local_file_uri(tmp_path):
+def test_milky_outgoing_builder_uses_normalized_media_uri(tmp_path):
     image = tmp_path / "image.bin"
     image.write_bytes(b"test-image")
 
     segment = MilkyOutGoingSegBuilder().image(str(image)).build()[0]
 
+    assert segment["type"] == "image"
     assert segment["data"]["uri"].startswith("file:///")
     assert segment["data"]["uri"].endswith("/image.bin")
-    assert not segment["data"]["uri"].startswith("base64://")
-
-
-def test_milky_image_segment_uses_bare_local_filename_uri(tmp_path, monkeypatch):
-    image = tmp_path / "image.bin"
-    image.write_bytes(b"test-image")
-    monkeypatch.chdir(tmp_path)
-
-    segment = MilkyOutGoingSegBuilder().image("image.bin").build()[0]
-
-    assert segment["data"]["uri"].startswith("file:///")
-    assert segment["data"]["uri"].endswith("/image.bin")
-    assert not segment["data"]["uri"].startswith("base64://")
-
-
-def test_milky_image_segment_rejects_missing_local_file():
-    with pytest.raises(FileNotFoundError, match="Milky media file does not exist"):
-        MilkyOutGoingSegBuilder().image("file://D:\\SRInternet.SR\\JianerCore\\missing.png")
-
-
-def test_milky_send_raises_when_api_rejects(monkeypatch):
-    connection = MilkyHttpConnection("ws://127.0.0.1:3000")
-
-    def fake_http_send(endpoint, data):
-        return {"status": "failed", "retcode": 400, "message": "bad payload", "data": None}
-
-    monkeypatch.setattr(connection, "http_send", fake_http_send)
-    actions = Actions(connection)
-
-    with pytest.raises(errors.ActionFailedError, match="Milky send failed"):
-        asyncio.run(actions.send("hello", group_id=10001))
 
 
 def test_milky_send_plain_text_returns_response(monkeypatch):
@@ -143,6 +118,7 @@ def test_milky_send_plain_text_returns_response(monkeypatch):
     response = asyncio.run(actions.send("hello", group_id=10001))
 
     assert response.ret_code == 0
+    assert response.data.message_id == msg_enid(1, 1, 10001)
     assert calls == [
         (
             "send_group_message",
@@ -151,117 +127,92 @@ def test_milky_send_plain_text_returns_response(monkeypatch):
     ]
 
 
-def test_milky_send_splits_long_text(monkeypatch):
+def test_milky_send_retries_without_reply_when_reply_payload_rejected(monkeypatch):
     connection = MilkyHttpConnection("ws://127.0.0.1:3000")
     calls = []
 
     def fake_http_send(endpoint, data):
         calls.append((endpoint, data))
-        sent_text = data["message"][0]["data"]["text"]
-        assert len(sent_text) <= MILKY_TEXT_CHUNK_LIMIT
-        return {"status": "ok", "retcode": 0, "data": {"message_seq": len(calls)}}
-
-    monkeypatch.setattr(connection, "http_send", fake_http_send)
-    actions = Actions(connection)
-
-    asyncio.run(actions.send("a" * (MILKY_TEXT_CHUNK_LIMIT + 10), group_id=10001))
-
-    assert [call[0] for call in calls] == ["send_group_message", "send_group_message"]
-    assert "".join(call[1]["message"][0]["data"]["text"] for call in calls) == "a" * (
-        MILKY_TEXT_CHUNK_LIMIT + 10
-    )
-
-
-def test_milky_send_splits_long_reply_text(monkeypatch):
-    connection = MilkyHttpConnection("ws://127.0.0.1:3000")
-    calls = []
-
-    def fake_http_send(endpoint, data):
-        calls.append((endpoint, data))
-        return {"status": "ok", "retcode": 0, "data": {"message_seq": len(calls)}}
+        if len(calls) == 1:
+            return {"status": "failed", "retcode": 400, "data": None}
+        return {"status": "ok", "retcode": 0, "data": {"message_seq": 2}}
 
     monkeypatch.setattr(connection, "http_send", fake_http_send)
     actions = Actions(connection)
     message = common.Message(
-        segments.Reply("123"),
-        segments.Text("b" * (MILKY_TEXT_CHUNK_LIMIT + 10)),
+        _MilkySegment(make_reply_segment(123)),
+        _MilkySegment(make_text_segment("hello")),
     )
 
-    asyncio.run(actions.send(message, group_id=10001))
+    response = asyncio.run(actions.send(message, group_id=10001))
 
-    assert len(calls) == 2
+    assert response.ret_code == 0
+    assert response.data.message_id == msg_enid(1, 2, 10001)
     assert calls[0][1]["message"][0] == {"type": "reply", "data": {"message_seq": 123}}
-    assert calls[0][1]["message"][1]["type"] == "text"
-    assert calls[1][1]["message"][0]["type"] == "text"
+    assert calls[1][1]["message"] == [{"type": "text", "data": {"text": "hello"}}]
 
 
-def test_milky_send_retries_failed_text_as_smaller_chunks(monkeypatch):
+def test_milky_get_stranger_info_uses_endpoint_fallback(monkeypatch):
     connection = MilkyHttpConnection("ws://127.0.0.1:3000")
     calls = []
 
     def fake_http_send(endpoint, data):
         calls.append((endpoint, data))
-        sent_text = "".join(
-            segment["data"].get("text", "")
-            for segment in data["message"]
-            if segment["type"] == "text"
-        )
-        if len(calls) == 1:
-            return {
-                "status": "failed",
-                "retcode": 502,
-                "msg": "Non-JSON response from /api/send_group_message",
-                "data": {"http_status": 502, "raw": ""},
-            }
-        assert len(sent_text) <= MILKY_TEXT_RECOVERY_CHUNK_LIMIT
-        return {"status": "ok", "retcode": 0, "data": {"message_seq": len(calls)}}
+        if len(calls) < 3:
+            return {"status": "failed", "retcode": 404, "data": None}
+        return {"status": "ok", "retcode": 0, "data": {"user_id": 10001, "name": "Tom"}}
 
     monkeypatch.setattr(connection, "http_send", fake_http_send)
-    monkeypatch.setattr("jianer.LecAdapters.Milky.time.sleep", lambda seconds: None)
-    actions = Actions(connection)
 
-    response = asyncio.run(actions.send("c" * (MILKY_TEXT_RECOVERY_CHUNK_LIMIT + 20), group_id=10001))
+    response = asyncio.run(Actions(connection).get_stranger_info(10001))
 
     assert response.ret_code == 0
-    assert [call[0] for call in calls] == [
-        "send_group_message",
-        "send_group_message",
-        "send_group_message",
-    ]
-    assert "".join(call[1]["message"][0]["data"]["text"] for call in calls[1:]) == "c" * (
-        MILKY_TEXT_RECOVERY_CHUNK_LIMIT + 20
-    )
+    assert response.data.user_id == 10001
+    assert response.data.nickname == "Tom"
+    assert [call[0] for call in calls] == ["get_user_profile", "profile", "get_stranger_info"]
 
 
-def test_milky_http_send_retries_transient_non_json_502(monkeypatch):
+def test_milky_http_send_uses_http_api_and_auth_header(monkeypatch):
     class Response:
-        def __init__(self, status_code, text, payload=None):
-            self.status_code = status_code
-            self.text = text
-            self._payload = payload
+        status_code = 200
+        text = '{"status":"ok"}'
 
         def json(self):
-            if self._payload is None:
-                raise translator.json.JSONDecodeError("bad json", self.text, 0)
-            return self._payload
+            return {"status": "ok", "retcode": 0, "data": {"message_seq": 1}}
 
-    responses = [
-        Response(502, ""),
-        Response(200, '{"status":"ok"}', {"status": "ok", "retcode": 0, "data": {"message_seq": 1}}),
-    ]
     calls = []
 
     def fake_post(url, **kwargs):
         calls.append((url, kwargs))
-        return responses.pop(0)
+        return Response()
 
     monkeypatch.setattr(translator.httpx, "post", fake_post)
-    monkeypatch.setattr(translator.time, "sleep", lambda seconds: None)
     connection = MilkyHttpConnection("ws://127.0.0.1:3000", auth="secret")
 
     response = connection.http_send("send_group_message", {"group_id": 1, "message": []})
 
     assert response["status"] == "ok"
-    assert len(calls) == 2
-    assert calls[0][1]["timeout"] == 15.0
-    assert calls[0][1]["headers"] == {"Authorization": "Bearer secret"}
+    assert calls == [
+        (
+            "http://127.0.0.1:3000/api/send_group_message",
+            {"json": {"group_id": 1, "message": []}, "headers": {"Authorization": "Bearer secret"}},
+        )
+    ]
+
+
+def test_milky_http_send_reports_non_json_response(monkeypatch):
+    class Response:
+        status_code = 502
+        text = "bad gateway"
+
+        def json(self):
+            raise translator.json.JSONDecodeError("bad json", self.text, 0)
+
+    monkeypatch.setattr(translator.httpx, "post", lambda *args, **kwargs: Response())
+    connection = MilkyHttpConnection("ws://127.0.0.1:3000")
+
+    response = connection.http_send("send_group_message", {"group_id": 1, "message": []})
+
+    assert response["status"] == "failed"
+    assert response["retcode"] == 502
+    assert response["data"]["raw"] == "bad gateway"

@@ -1,224 +1,81 @@
-import json
 import asyncio
+import json
 from types import SimpleNamespace
 
-from jianer.LecAdapters.Feishu import Actions, _message_to_feishu
-from jianer.LecAdapters.FeishuLib.Manager import Packet, reports
-from jianer.LecAdapters.FeishuLib.client import (
-    FeishuHttpConnection,
-    FeishuOapiConnection,
-    feishu_content_to_onebot,
-    translate_event,
-)
 from jianer import common, segments
+from jianer.LecAdapters import Feishu
+from jianer.LecAdapters.Feishu import Actions, FeishuEventServer, FeishuLongConnectionWorker
+from jianer.LecAdapters.FeishuLib.Manager import Packet, reports
+from jianer.LecAdapters.FeishuLib.client import FeishuClient
+from jianer.LecAdapters.FeishuLib.translator import (
+    build_hyper_event,
+    feishu_message_to_segments,
+    stringify_feishu_message,
+)
 
 
-class FakeValueBuilder:
-    def __init__(self, value=None):
-        self.value = value or SimpleNamespace()
+class _Config:
+    log_level = "INFO"
 
-    def __getattr__(self, item):
-        def setter(value):
-            setattr(self.value, item, value)
-            return self
+    def __init__(self, connection=None, others=None):
+        self.connection = connection or SimpleNamespace()
+        self.others = others or {}
 
-        return setter
-
-    def build(self):
-        return self.value
+    def get_connection(self, protocol=None):
+        return self.connection
 
 
-class FakeRequestOption:
-    @staticmethod
-    def builder():
-        return FakeValueBuilder(SimpleNamespace())
+def _client(**connection_kwargs):
+    defaults = {
+        "app_id": "cli_app",
+        "app_secret": "secret",
+        "base_url": "https://open.feishu.cn",
+        "verification_token": "verify",
+        "encrypt_key": "encrypt",
+        "callback_path": "/feishu/callback",
+        "bot_open_id": "ou_bot",
+        "event_mode": "webhook",
+        "token_refresh_skew_seconds": 300,
+    }
+    defaults.update(connection_kwargs)
+    connection = SimpleNamespace(**defaults)
+    return FeishuClient(_Config(connection=connection))
 
 
-class FakeBaseRequest:
-    @staticmethod
-    def builder():
-        return FakeValueBuilder(SimpleNamespace())
+def test_feishu_message_to_segments_parses_mentions():
+    message = {
+        "message_type": "text",
+        "content": json.dumps({"text": 'hi <at user_id="ou_user">@Tom</at>'}),
+    }
 
-
-class FakeCreateMessageRequestBody:
-    @staticmethod
-    def builder():
-        return FakeValueBuilder(SimpleNamespace())
-
-
-class FakeCreateMessageRequest:
-    @staticmethod
-    def builder():
-        return FakeValueBuilder(SimpleNamespace())
-
-
-class FakeMessageApi:
-    def __init__(self):
-        self.calls = []
-
-    def create(self, request, option=None):
-        self.calls.append((request, option))
-        return SimpleNamespace(
-            code=0,
-            msg="success",
-            data=SimpleNamespace(message_id="om_msg"),
-        )
-
-
-class FakeApiClient:
-    def __init__(self):
-        self.generic_requests = []
-        self.im = SimpleNamespace(v1=SimpleNamespace(message=FakeMessageApi()))
-
-    def request(self, request, option=None):
-        self.generic_requests.append((request, option))
-        return SimpleNamespace(
-            code=0,
-            msg="success",
-            raw=SimpleNamespace(
-                content=b'{"code":0,"msg":"success","bot":{"open_id":"ou_bot","app_name":"Bot"}}',
-            ),
-        )
-
-
-class FakeClientBuilder:
-    def __init__(self, owner):
-        self.owner = owner
-        self.config = SimpleNamespace()
-
-    def __getattr__(self, item):
-        def setter(value):
-            setattr(self.config, item, value)
-            return self
-
-        return setter
-
-    def build(self):
-        client = FakeApiClient()
-        self.owner.last_client = client
-        self.owner.last_config = self.config
-        return client
-
-
-class FakeClientFactory:
-    last_client = None
-    last_config = None
-
-    @classmethod
-    def builder(cls):
-        return FakeClientBuilder(cls)
-
-
-class FakeWsClient:
-    instances = []
-
-    def __init__(self, *args, **kwargs):
-        self.args = args
-        self.kwargs = kwargs
-        self.started = False
-        self.instances.append(self)
-
-    def start(self):
-        self.started = True
-
-
-class FakeEventBuilder:
-    def __init__(self, encrypt_key, verification_token):
-        self.encrypt_key = encrypt_key
-        self.verification_token = verification_token
-        self.handlers = {}
-
-    def register_p2_im_message_receive_v1(self, handler):
-        self.handlers["message"] = handler
-        return self
-
-    def register_p2_application_bot_menu_v6(self, handler):
-        self.handlers["menu"] = handler
-        return self
-
-    def build(self):
-        return self
-
-
-class FakeEventDispatcherHandler:
-    last_builder = None
-
-    @classmethod
-    def builder(cls, encrypt_key, verification_token):
-        cls.last_builder = FakeEventBuilder(encrypt_key, verification_token)
-        return cls.last_builder
-
-
-class FakeLark:
-    Client = FakeClientFactory
-    EventDispatcherHandler = FakeEventDispatcherHandler
-    RequestOption = FakeRequestOption
-    BaseRequest = FakeBaseRequest
-    LogLevel = SimpleNamespace(DEBUG="DEBUG", INFO="INFO", WARNING="WARNING", ERROR="ERROR")
-    HttpMethod = SimpleNamespace(GET="GET", POST="POST", PUT="PUT", PATCH="PATCH", DELETE="DELETE")
-    AccessTokenType = SimpleNamespace(TENANT="TENANT")
-    ws = SimpleNamespace(Client=FakeWsClient)
-    im = SimpleNamespace(
-        v1=SimpleNamespace(
-            CreateMessageRequestBody=FakeCreateMessageRequestBody,
-            CreateMessageRequest=FakeCreateMessageRequest,
-        )
-    )
-
-
-def fake_lark():
-    FakeWsClient.instances = []
-    FakeClientFactory.last_client = None
-    FakeClientFactory.last_config = None
-    FakeEventDispatcherHandler.last_builder = None
-    return FakeLark
-
-
-def test_feishu_text_content_translates_mentions():
-    message = feishu_content_to_onebot(
-        "text",
-        "{\"text\":\"@_user_1 hello\"}",
-        [
-            {
-                "key": "@_user_1",
-                "id": {"open_id": "ou_user"},
-                "mentioned_type": "user",
-            }
-        ],
-    )
-
-    assert message == [
+    assert feishu_message_to_segments(message) == [
+        {"type": "text", "data": {"text": "hi "}},
         {"type": "at", "data": {"qq": "ou_user"}},
-        {"type": "text", "data": {"text": " hello"}},
     ]
 
 
 def test_feishu_message_event_translates_to_group_message():
     payload = {
-        "schema": "2.0",
         "header": {
-            "event_id": "evt_1",
             "event_type": "im.message.receive_v1",
             "create_time": "1608725989000",
-            "app_id": "cli_app",
         },
         "event": {
             "sender": {
                 "sender_id": {"open_id": "ou_sender"},
-                "sender_type": "user",
+                "name": "Tom",
             },
             "message": {
                 "message_id": "om_msg",
-                "create_time": "1609073151345",
                 "chat_id": "oc_chat",
                 "chat_type": "group",
                 "message_type": "text",
-                "content": "{\"text\":\"hello\"}",
+                "content": json.dumps({"text": "hello"}),
             },
         },
     }
 
-    event = translate_event(payload, self_id="ou_bot")
+    event = build_hyper_event(payload, "ou_bot")
 
     assert event["post_type"] == "message"
     assert event["message_type"] == "group"
@@ -228,55 +85,76 @@ def test_feishu_message_event_translates_to_group_message():
     assert event["message"] == [{"type": "text", "data": {"text": "hello"}}]
 
 
-def test_feishu_menu_event_translates_to_notice():
+def test_feishu_menu_event_translates_to_private_menu_message():
     payload = {
-        "schema": "2.0",
         "header": {
+            "event_id": "evt_menu",
             "event_type": "application.bot.menu_v6",
-            "app_id": "cli_app",
             "create_time": "1608725989000",
         },
         "event": {
             "operator": {
-                "operator_name": "Tom",
                 "operator_id": {"open_id": "ou_operator"},
+                "name": "Tom",
             },
             "event_key": "menu_key",
-            "timestamp": 1669364458,
         },
     }
 
-    event = translate_event(payload, self_id="ou_bot")
+    event = build_hyper_event(payload, "ou_bot")
 
-    assert event["post_type"] == "notice"
-    assert event["notice_type"] == "bot_menu"
-    assert event["operator_id"] == "ou_operator"
-    assert event["operator_name"] == "Tom"
-    assert event["event_key"] == "menu_key"
-
-
-def test_feishu_message_to_text_payload_supports_at_segments():
-    msg_type, content = _message_to_feishu(
-        common.Message(segments.Text("hi "), segments.At("ou_user"))
-    )
-
-    assert msg_type == "text"
-    assert content == {"text": "hi <at id=\"ou_user\"></at>"}
+    assert event["post_type"] == "message"
+    assert event["message_type"] == "private"
+    assert event["sub_type"] == "menu"
+    assert event["user_id"] == "ou_operator"
+    assert event["message"] == [{"type": "text", "data": {"text": "menu_key"}}]
 
 
-def test_feishu_packet_stores_normalized_send_response(monkeypatch):
-    connection = FeishuHttpConnection("cli_app", "secret", tenant_access_token="t-token")
+def test_feishu_client_reads_connection_and_encodes_send(monkeypatch):
+    client = _client(event_mode="long_connection", callback_path="/callback")
     calls = []
 
-    def fake_request(method, path, *, params=None, json_body=None, auth=True):
-        calls.append((method, path, params, json_body, auth))
+    def fake_request(method, path, params=None, json_body=None, data=None, files=None, auth=True):
+        calls.append((method, path, params, json_body, data, files, auth))
+        if path.endswith("/tenant_access_token/internal"):
+            return {"tenant_access_token": "tenant-token", "expire": 7200}
+        return {"data": {"message_id": "om_msg"}}
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    assert client.event_mode == "long_connection"
+    assert client.callback_path == "/callback"
+    assert client.get_tenant_access_token() == "tenant-token"
+    assert client.send_message("chat_id", "oc_chat", "text", {"text": "hello"}) == {"message_id": "om_msg"}
+
+    assert calls[-1] == (
+        "POST",
+        "/open-apis/im/v1/messages",
+        {"receive_id_type": "chat_id"},
+        {
+            "receive_id": "oc_chat",
+            "msg_type": "text",
+            "content": json.dumps({"text": "hello"}, ensure_ascii=False),
+        },
+        None,
+        None,
+        True,
+    )
+
+
+def test_feishu_packet_uses_client_call_and_stores_response(monkeypatch):
+    client = _client()
+
+    def fake_send_message(receive_id_type, receive_id, msg_type, content):
         return {
-            "code": 0,
-            "msg": "success",
-            "data": {"message_id": "om_msg"},
+            "receive_id_type": receive_id_type,
+            "receive_id": receive_id,
+            "msg_type": msg_type,
+            "content": content,
+            "message_id": "om_msg",
         }
 
-    monkeypatch.setattr(connection, "request", fake_request)
+    monkeypatch.setattr(client, "send_message", fake_send_message)
     packet = Packet(
         "send_message",
         receive_id="oc_chat",
@@ -285,128 +163,156 @@ def test_feishu_packet_stores_normalized_send_response(monkeypatch):
         content={"text": "hello"},
     )
 
-    response = packet.send_to(connection)
+    response = packet.send_to(client)
     fetched = reports.get(packet.echo)
 
     assert response["status"] == "ok"
+    assert response["echo"] == packet.echo
     assert fetched["data"]["message_id"] == "om_msg"
+
+
+def test_feishu_actions_send_uploads_media_and_returns_last_message_id(monkeypatch):
+    client = _client()
+    calls = []
+
+    def fake_upload_image(source):
+        calls.append(("upload_image", source))
+        return "img_uploaded"
+
+    def fake_send_message(receive_id_type, receive_id, msg_type, content):
+        calls.append(("send_message", receive_id_type, receive_id, msg_type, content))
+        return {"message_id": f"{msg_type}_id"}
+
+    monkeypatch.setattr(client, "upload_image", fake_upload_image)
+    monkeypatch.setattr(client, "send_message", fake_send_message)
+
+    message = common.Message(segments.Image("local.png"), segments.Text("hello"))
+    result = asyncio.run(Actions(client).send(message, group_id="oc_chat"))
+
+    assert result.status == "ok"
+    assert result.data.message_id == "text_id"
     assert calls == [
-        (
-            "POST",
-            "/open-apis/im/v1/messages",
-            {"receive_id_type": "chat_id"},
-            {
-                "receive_id": "oc_chat",
-                "msg_type": "text",
-                "content": json.dumps({"text": "hello"}, ensure_ascii=False),
-            },
-            True,
-        )
+        ("upload_image", "local.png"),
+        ("send_message", "chat_id", "oc_chat", "image", {"image_key": "img_uploaded"}),
+        ("send_message", "chat_id", "oc_chat", "text", {"text": "hello"}),
     ]
 
 
-def test_feishu_actions_send_returns_message_id(monkeypatch):
-    connection = FeishuHttpConnection("cli_app", "secret", tenant_access_token="t-token")
+def test_feishu_actions_degrades_failed_image_upload_to_text(monkeypatch):
+    client = _client()
+    sent = []
 
-    def fake_request(method, path, *, params=None, json_body=None, auth=True):
-        return {
-            "code": 0,
-            "msg": "success",
-            "data": {"message_id": "om_msg"},
-        }
-
-    monkeypatch.setattr(connection, "request", fake_request)
-
-    result = asyncio.run(Actions(connection).send("hello", group_id="oc_chat"))
-
-    assert result.status == "ok"
-    assert result.data.message_id == "om_msg"
-
-
-def test_feishu_oapi_connection_starts_long_connection_and_translates_events():
-    lark = fake_lark()
-    connection = FeishuOapiConnection(
-        "cli_app",
-        "secret",
-        verification_token="verify",
-        encrypt_key="encrypt",
-        lark_module=lark,
+    monkeypatch.setattr(client, "upload_image", lambda source: (_ for _ in ()).throw(RuntimeError("no permission")))
+    monkeypatch.setattr(
+        client,
+        "send_message",
+        lambda receive_id_type, receive_id, msg_type, content: sent.append(content) or {"message_id": "text_id"},
     )
 
-    connection.connect()
+    result = asyncio.run(Actions(client).send(common.Message(segments.Image("local.png")), group_id="oc_chat"))
 
-    assert connection.listener_started is True
-    assert FakeWsClient.instances[-1].started is True
-    assert FakeWsClient.instances[-1].kwargs["event_handler"] is FakeEventDispatcherHandler.last_builder
-    assert FakeEventDispatcherHandler.last_builder.verification_token == "verify"
-    assert FakeEventDispatcherHandler.last_builder.encrypt_key == "encrypt"
-    assert set(FakeEventDispatcherHandler.last_builder.handlers) == {"message", "menu"}
-
-    event_payload = SimpleNamespace(
-        header=SimpleNamespace(
-            event_id="evt_1",
-            event_type="im.message.receive_v1",
-            create_time="1608725989000",
-            app_id="cli_app",
-        ),
-        event=SimpleNamespace(
-            sender=SimpleNamespace(sender_id=SimpleNamespace(open_id="ou_sender")),
-            message=SimpleNamespace(
-                message_id="om_msg",
-                create_time="1609073151345",
-                chat_id="oc_chat",
-                chat_type="group",
-                message_type="text",
-                content='{"text":"hello"}',
-            ),
-        ),
-    )
-    FakeEventDispatcherHandler.last_builder.handlers["message"](event_payload)
-
-    event = connection.recv()
-
-    assert event["message_type"] == "group"
-    assert event["group_id"] == "oc_chat"
-    assert event["user_id"] == "ou_sender"
-    assert event["message"] == [{"type": "text", "data": {"text": "hello"}}]
+    assert result.data.message_id == "text_id"
+    assert sent[0]["text"]
+    assert "im:resource" in sent[0]["text"]
 
 
-def test_feishu_oapi_connection_sends_message_with_lark_sdk():
-    lark = fake_lark()
-    connection = FeishuOapiConnection("cli_app", "secret", tenant_access_token="t-token", lark_module=lark)
+def test_feishu_event_server_accepts_challenge_and_queues_events():
+    client = _client()
+    server = FeishuEventServer(client)
+    test_client = server.app.test_client()
 
-    response = connection.send_message(
-        receive_id="oc_chat",
-        receive_id_type="chat_id",
-        msg_type="text",
-        content={"text": "hello"},
-        uuid="uuid-1",
+    challenge = test_client.post(
+        "/feishu/callback",
+        json={"type": "url_verification", "token": "verify", "challenge": "ok"},
     )
 
-    client = FakeClientFactory.last_client
-    request, option = client.im.v1.message.calls[0]
+    assert challenge.status_code == 200
+    assert challenge.get_json() == {"challenge": "ok"}
 
-    assert response["data"]["message_id"] == "om_msg"
-    assert request.receive_id_type == "chat_id"
-    assert request.request_body.receive_id == "oc_chat"
-    assert request.request_body.msg_type == "text"
-    assert request.request_body.content == json.dumps({"text": "hello"}, ensure_ascii=False)
-    assert request.request_body.uuid == "uuid-1"
-    assert option.tenant_access_token == "t-token"
+    payload = {
+        "header": {"event_id": "evt_1", "token": "verify"},
+        "event": {"message": {"message_id": "om_msg"}},
+    }
+    response = test_client.post("/feishu/callback", json=payload)
+
+    assert response.status_code == 200
+    assert server.queue.get_nowait() == payload
 
 
-def test_feishu_oapi_connection_gets_bot_info_with_lark_request():
-    lark = fake_lark()
-    connection = FeishuOapiConnection("cli_app", "secret", lark_module=lark)
+def test_feishu_long_connection_worker_pushes_registered_events(monkeypatch):
+    client = _client(app_id="cli_app", app_secret="secret")
+    event_queue = Feishu.queue.Queue()
+    created = {}
 
-    response = connection.get_bot_info()
+    class FakeLark:
+        class JSON:
+            @staticmethod
+            def marshal(data):
+                return json.dumps(data)
 
-    client = FakeClientFactory.last_client
-    request, option = client.generic_requests[0]
+        class LogLevel:
+            INFO = "INFO"
 
-    assert response["bot"]["open_id"] == "ou_bot"
-    assert connection.bot_open_id == "ou_bot"
-    assert request.http_method == "GET"
-    assert request.uri == "/open-apis/bot/v3/info"
-    assert request.token_types == {"TENANT"}
-    assert option is None
+        class ws:
+            class Client:
+                def __init__(self, app_id, app_secret, log_level=None, event_handler=None):
+                    created["ws"] = self
+                    self.app_id = app_id
+                    self.app_secret = app_secret
+                    self.log_level = log_level
+                    self.event_handler = event_handler
+                    self.started = False
+
+                def start(self):
+                    self.started = True
+
+    class FakeBuilder:
+        def __init__(self, encrypt_key, verification_token):
+            created["builder"] = self
+            self.encrypt_key = encrypt_key
+            self.verification_token = verification_token
+            self.handlers = {}
+
+        def register_p2_im_message_receive_v1(self, handler):
+            self.handlers["message"] = handler
+            return self
+
+        def register_p2_application_bot_menu_v6(self, handler):
+            self.handlers["menu"] = handler
+            return self
+
+        def register_p2_im_chat_access_event_bot_p2p_chat_entered_v1(self, handler):
+            self.handlers["p2p"] = handler
+            return self
+
+        def build(self):
+            return self
+
+    fake_dispatcher = SimpleNamespace(EventDispatcherHandlerBuilder=FakeBuilder)
+
+    def fake_import(name):
+        if name == "lark_oapi":
+            return FakeLark
+        if name == "lark_oapi.event.dispatcher_handler":
+            return fake_dispatcher
+        raise AssertionError(name)
+
+    monkeypatch.setattr(Feishu.importlib, "import_module", fake_import)
+
+    worker = FeishuLongConnectionWorker(client, event_queue)
+    worker.run()
+
+    assert created["ws"].started is True
+    assert created["ws"].event_handler is created["builder"]
+    assert created["builder"].verification_token == "verify"
+    assert created["builder"].encrypt_key == "encrypt"
+    assert set(created["builder"].handlers) == {"message", "menu", "p2p"}
+
+    payload = {"header": {"event_type": "im.message.receive_v1"}}
+    created["builder"].handlers["message"](payload)
+
+    assert event_queue.get_nowait() == payload
+
+
+def test_feishu_stringify_message_prefers_text():
+    assert stringify_feishu_message({"content": json.dumps({"text": "hello"})}) == "hello"

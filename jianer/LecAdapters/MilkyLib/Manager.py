@@ -1,8 +1,8 @@
-import random
-
 from ... import configurator, hyperogger
 from ...utils import logic
 from .translator import MilkyHttpConnection
+
+import random
 
 reports = logic.KeyQueue()
 
@@ -24,11 +24,11 @@ class Packet:
         self.echo = f"{endpoint}_{random.randint(1000, 9999)}"
 
     def send_to(self, connection: MilkyHttpConnection) -> dict:
-        if not isinstance(connection, MilkyHttpConnection):
+        if isinstance(connection, MilkyHttpConnection):
+            res = connection.http_send(self.endpoint, self.paras)
+            if isinstance(res, dict):
+                res["echo"] = self.echo
+                reports.put(self.echo, res)
+            return res
+        else:
             raise ValueError(f"Invalid connection: {connection}")
-
-        res = connection.http_send(self.endpoint, self.paras)
-        if isinstance(res, dict):
-            res["echo"] = self.echo
-            reports.put(self.echo, res)
-        return res

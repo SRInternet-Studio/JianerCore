@@ -1,4 +1,6 @@
-from typing import Any, Literal, Optional, TypedDict, Union, cast
+from __future__ import annotations
+
+from typing import Any, Literal, TypedDict, Union, cast
 
 
 MilkyScene = Literal["friend", "private", "group", 0, 1, "0", "1"]
@@ -267,13 +269,78 @@ GroupMemberEntity = MilkyGroupMemberEntity
 IncomingMessage = MilkyMessageReceiveData
 
 
+__all__ = [
+    "Event",
+    "FriendEntity",
+    "FriendCategoryEntity",
+    "GroupEntity",
+    "GroupMemberEntity",
+    "GroupAnnouncementEntity",
+    "GroupFileEntity",
+    "GroupFolderEntity",
+    "FriendRequest",
+    "GroupNotification",
+    "IncomingMessage",
+    "IncomingForwardedMessage",
+    "GroupEssenceMessage",
+    "IncomingSegment",
+    "OutgoingForwardedMessage",
+    "OutgoingSegment",
+    "MilkyScene",
+    "MilkySceneNormalized",
+    "MilkySegmentType",
+    "MilkyTextSegData",
+    "MilkyImageSegData",
+    "MilkyMentionSegData",
+    "MilkyReplySegData",
+    "MilkyFaceSegData",
+    "MilkyRecordSegData",
+    "MilkyVideoSegData",
+    "MilkyForwardNode",
+    "MilkyForwardSegData",
+    "MilkyMarketFaceSegData",
+    "MilkyTextSegment",
+    "MilkyImageSegment",
+    "MilkyMentionSegment",
+    "MilkyMentionAllSegment",
+    "MilkyReplySegment",
+    "MilkyFaceSegment",
+    "MilkyRecordSegment",
+    "MilkyVideoSegment",
+    "MilkyForwardSegment",
+    "MilkyMarketFaceSegment",
+    "MilkySegment",
+    "MilkyOutgoingSegment",
+    "MilkyFriendEntity",
+    "MilkyGroupMemberEntity",
+    "MilkyMessageReceiveData",
+    "MilkyEvent",
+    "consume_segment",
+    "consume_segments",
+    "consume_friend_entity",
+    "consume_group_member_entity",
+    "normalize_scene",
+    "consume_milky_event",
+    "make_text_segment",
+    "make_mention_segment",
+    "make_mention_all_segment",
+    "make_face_segment",
+    "make_reply_segment",
+    "make_image_segment",
+    "make_record_segment",
+    "make_video_segment",
+    "make_forward_node",
+    "make_forward_segment",
+]
+
+
 def _as_dict(data: Any) -> dict[str, Any]:
     if isinstance(data, dict):
         return cast(dict[str, Any], data)
     return {}
 
 
-def consume_segment(seg: Any) -> Optional[MilkySegment]:
+def consume_segment(seg: Any) -> MilkySegment | None:
     if not isinstance(seg, dict):
         return None
     seg_type = seg.get("type")
@@ -308,14 +375,16 @@ def consume_segments(raw: Any) -> list[MilkySegment]:
 
 
 def consume_friend_entity(raw: Any) -> MilkyFriendEntity:
-    return cast(MilkyFriendEntity, _as_dict(raw))
+    data = _as_dict(raw)
+    return cast(MilkyFriendEntity, data)
 
 
 def consume_group_member_entity(raw: Any) -> MilkyGroupMemberEntity:
-    return cast(MilkyGroupMemberEntity, _as_dict(raw))
+    data = _as_dict(raw)
+    return cast(MilkyGroupMemberEntity, data)
 
 
-def normalize_scene(scene: Any) -> Optional[MilkySceneNormalized]:
+def normalize_scene(scene: Any) -> MilkySceneNormalized | None:
     if scene in ("friend", "private", 0, "0"):
         return "friend"
     if scene in ("group", 1, "1"):
@@ -323,7 +392,7 @@ def normalize_scene(scene: Any) -> Optional[MilkySceneNormalized]:
     return None
 
 
-def consume_milky_event(raw: Any) -> Optional[MilkyEvent]:
+def consume_milky_event(raw: Any) -> MilkyEvent | None:
     if not isinstance(raw, dict):
         return None
     packet = cast(dict[str, Any], raw.copy())
@@ -342,18 +411,21 @@ def consume_milky_event(raw: Any) -> Optional[MilkyEvent]:
     event_time = packet.get("time")
     self_id = packet.get("self_id")
     data = packet.get("data")
-    if not isinstance(event_type, str) or not isinstance(data, dict):
+    if not isinstance(event_type, str):
+        return None
+    if not isinstance(data, dict):
         return None
     try:
         event_time_i = int(event_time)
         self_id_i = int(self_id)
     except (TypeError, ValueError):
         return None
+    event_data = cast(MilkyMessageReceiveData, data)
     return {
         "type": event_type,
         "time": event_time_i,
         "self_id": self_id_i,
-        "data": cast(MilkyMessageReceiveData, data),
+        "data": event_data,
     }
 
 
@@ -392,7 +464,7 @@ def make_record_segment(uri: str) -> MilkyRecordSegment:
     return {"type": "record", "data": {"uri": uri}}
 
 
-def make_video_segment(uri: str, thumb_uri: Optional[str] = None) -> MilkyVideoSegment:
+def make_video_segment(uri: str, thumb_uri: str | None = None) -> MilkyVideoSegment:
     data: MilkyVideoSegData = {"uri": uri}
     if thumb_uri is not None:
         data["thumb_uri"] = thumb_uri

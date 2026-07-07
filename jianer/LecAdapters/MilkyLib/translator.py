@@ -1,14 +1,12 @@
-import json
-import os
-import time
-from typing import Optional
-from urllib.parse import unquote
+from __future__ import annotations
 
 import httpx
+import json
+import os
 
 from jianer.network import WebsocketConnection
-from ...adapters.obuilder import OneBotEventBuilder, OneBotJsonMessageBuilder
 from ...utils.logic import Matcher
+from ...adapters.obuilder import OneBotEventBuilder, OneBotJsonMessageBuilder
 from .types import (
     MilkyForwardNode,
     MilkyOutgoingSegment,
@@ -32,6 +30,7 @@ from .types import (
 
 
 def msg_enid(scene: int, seq: int, peer_id: int) -> int:
+    # For scene: friend: 0, group: 1
     return (scene << 128) | (seq << 64) | peer_id
 
 
@@ -42,23 +41,16 @@ def msg_deid(enid: int) -> tuple[int, int, int]:
     return scene, seq, peer_id
 
 
-def normalize_uri(uri: Optional[str]) -> Optional[str]:
+def normalize_uri(uri: str | None) -> str | None:
     if uri is None:
         return None
     raw = str(uri).strip()
     if len(raw) == 0:
         return raw
     lower = raw.lower()
-    if lower.startswith("file://"):
-        path = raw[len("file://"):].replace("\\", "/")
-        while "//" in path:
-            path = path.replace("//", "/")
-        if len(path) >= 2 and path[1] == ":":
-            path = "/" + path
-        return f"file://{path}"
-    if lower.startswith(("http://", "https://", "base64://")):
+    if lower.startswith("file://") or lower.startswith("http://") or lower.startswith("https://") or lower.startswith("base64://"):
         return raw
-    if len(raw) >= 3 and raw[1] == ":" and raw[2] in ("\\", "/"):
+    if len(raw) >= 3 and raw[1] == ":" and (raw[2] == "\\" or raw[2] == "/"):
         path = raw.replace("\\", "/")
         while "//" in path:
             path = path.replace("//", "/")
@@ -73,45 +65,6 @@ def normalize_uri(uri: Optional[str]) -> Optional[str]:
             path = "/" + path
         return f"file://{path}"
     return raw
-
-
-def _local_path_from_file_uri(uri: str) -> str:
-    path = unquote(uri[len("file://"):])
-    if os.name == "nt":
-        if len(path) >= 3 and path[0] == "/" and path[2] == ":":
-            path = path[1:]
-        return path.replace("/", "\\")
-    return path
-
-
-def _file_uri_from_local_path(path: str) -> str:
-    uri_path = os.path.abspath(path).replace("\\", "/")
-    while "//" in uri_path:
-        uri_path = uri_path.replace("//", "/")
-    if not uri_path.startswith("/"):
-        uri_path = "/" + uri_path
-    return f"file://{uri_path}"
-
-
-def prepare_outgoing_media_uri(uri: Optional[str]) -> Optional[str]:
-    normalized = normalize_uri(uri)
-    if normalized is None:
-        return None
-
-    lower = normalized.lower()
-    if lower.startswith(("http://", "https://", "base64://")):
-        return normalized
-    if lower.startswith("file://"):
-        path = _local_path_from_file_uri(normalized)
-    elif "://" in normalized:
-        return normalized
-    else:
-        path = os.path.abspath(normalized)
-
-    if not os.path.isfile(path):
-        raise FileNotFoundError(f"Milky media file does not exist: {path}")
-
-    return _file_uri_from_local_path(path)
 
 
 def message_translator(milky_message: list[MilkySegment], peer_id: int, scene: int = 0) -> list[dict]:
@@ -162,15 +115,6 @@ def message_translator(milky_message: list[MilkySegment], peer_id: int, scene: i
             continue
 
     return builder.build()
-
-
-def to_milky_message(message) -> list[MilkyOutgoingSegment]:
-    segments = []
-    for item in message.contents:
-        if not hasattr(item, "milky_outgoing_seg"):
-            raise NotImplementedError(f"Segment {type(item)} not supported in Milky adapter.")
-        segments.append(item.milky_outgoing_seg())
-    return segments
 
 
 class MilkyHttpConnection(WebsocketConnection):
@@ -227,7 +171,7 @@ class MilkyHttpConnection(WebsocketConnection):
                     ) \
                     .private_sender(nickname, sex, 0) \
                     .build()
-            if message_scene == "group":
+            elif message_scene == "group":
                 group_member = consume_group_member_entity(milky_data.get("group_member") or milky_data.get("member"))
                 nickname = group_member.get("nickname") or group_member.get("name") or str(sender_id)
                 sex = group_member.get("sex") or "unknown"
@@ -241,8 +185,19 @@ class MilkyHttpConnection(WebsocketConnection):
                         message_translator(milky_segments, int(peer_id), 1),
                         str(msg_enid(1, int(message_seq), int(peer_id)))
                     ) \
-                    .group_sender(nickname, sex, 0, card, "", level, role, title) \
+                    .group_sender(
+                        nickname,
+                        sex,
+                        0,
+                        card,
+                        "",
+                        level,
+                        role,
+                        title,
+                    ) \
                     .build()
+            else:
+                continue
 
     def http_send(self, endpoint: str, data: dict) -> dict:
         if not data:
@@ -252,78 +207,68 @@ class MilkyHttpConnection(WebsocketConnection):
             base_url = "http://" + base_url[len("ws://"):]
         elif base_url.startswith("wss://"):
             base_url = "https://" + base_url[len("wss://"):]
-        for attempt in range(3):
-            try:
-                if self.auth:
-                    response = httpx.post(
-                        f"{base_url}/api/{endpoint}",
-                        json=data,
-                        headers={"Authorization": f"Bearer {self.auth}"},
-                        timeout=15.0,
-                    )
-                else:
-                    response = httpx.post(f"{base_url}/api/{endpoint}", json=data, timeout=15.0)
-            except httpx.RequestError as exc:
-                if attempt < 2:
-                    time.sleep(0.5 * (attempt + 1))
-                    continue
-                return {
-                    "status": "failed",
-                    "retcode": -1,
-                    "msg": str(exc),
-                    "data": None,
-                }
-            try:
-                return response.json()
-            except json.JSONDecodeError:
-                raw_text = response.text[:500] if isinstance(response.text, str) else ""
-                if response.status_code in (502, 503, 504) and attempt < 2:
-                    time.sleep(0.5 * (attempt + 1))
-                    continue
-                return {
-                    "status": "failed",
-                    "retcode": response.status_code,
-                    "msg": f"Non-JSON response from /api/{endpoint}",
-                    "data": {"http_status": response.status_code, "raw": raw_text},
-                }
+        try:
+            if self.auth:
+                response = httpx.post(f"{base_url}/api/{endpoint}", json=data,
+                                      headers={"Authorization": f"Bearer {self.auth}"})
+            else:
+                response = httpx.post(f"{base_url}/api/{endpoint}", json=data)
+        except httpx.RequestError as e:
+            return {
+                "status": "failed",
+                "retcode": -1,
+                "msg": str(e),
+                "data": None
+            }
+        try:
+            res = response.json()
+            return res
+        except json.JSONDecodeError:
+            raw_text = response.text[:500] if isinstance(response.text, str) else ""
+            return {
+                "status": "failed",
+                "retcode": response.status_code,
+                "msg": f"Non-JSON response from /api/{endpoint}",
+                "data": {"http_status": response.status_code, "raw": raw_text}
+            }
 
     class MilkyOutGoingSegBuilder:
         def __init__(self) -> None:
             self.segments: list[MilkyOutgoingSegment] = []
 
-        def text(self, text: str) -> "MilkyOutGoingSegBuilder":
+        def text(self, text: str) -> 'MilkyOutGoingSegBuilder':
             self.segments.append(make_text_segment(text))
             return self
 
-        def mention(self, user_id: int) -> "MilkyOutGoingSegBuilder":
+        def mention(self, user_id: int) -> 'MilkyOutGoingSegBuilder':
             self.segments.append(make_mention_segment(user_id))
             return self
 
-        def mention_all(self) -> "MilkyOutGoingSegBuilder":
+        def mention_all(self) -> 'MilkyOutGoingSegBuilder':
             self.segments.append(make_mention_all_segment())
             return self
 
-        def face(self, face_id: str) -> "MilkyOutGoingSegBuilder":
+        def face(self, face_id: str) -> 'MilkyOutGoingSegBuilder':
             self.segments.append(make_face_segment(face_id))
             return self
 
-        def reply(self, seq: int) -> "MilkyOutGoingSegBuilder":
+        def reply(self, seq: int) -> 'MilkyOutGoingSegBuilder':
             self.segments.append(make_reply_segment(seq))
             return self
 
-        def image(self, uri: str, summary: str = "[Image]", sub_type: str = "normal") -> "MilkyOutGoingSegBuilder":
-            normalized_uri = prepare_outgoing_media_uri(uri) or ""
+        def image(self, uri: str, summary: str = "[Image]", sub_type: str = "normal") -> 'MilkyOutGoingSegBuilder':
+            normalized_uri = normalize_uri(uri) or ""
             self.segments.append(make_image_segment(normalized_uri, summary, sub_type))
             return self
 
         def record(self, uri: str) -> "MilkyOutGoingSegBuilder":
-            normalized_uri = prepare_outgoing_media_uri(uri) or ""
+            normalized_uri = normalize_uri(uri) or ""
             self.segments.append(make_record_segment(normalized_uri))
             return self
 
-        def video(self, uri: str, thumb_uri: Optional[str] = None) -> "MilkyOutGoingSegBuilder":
-            normalized_uri = prepare_outgoing_media_uri(uri) or ""
-            normalized_thumb_uri = prepare_outgoing_media_uri(thumb_uri)
+        def video(self, uri: str, thumb_uri: str = None) -> "MilkyOutGoingSegBuilder":
+            normalized_uri = normalize_uri(uri) or ""
+            normalized_thumb_uri = normalize_uri(thumb_uri)
             self.segments.append(make_video_segment(normalized_uri, normalized_thumb_uri))
             return self
 
