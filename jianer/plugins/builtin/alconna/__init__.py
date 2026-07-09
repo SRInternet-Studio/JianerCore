@@ -124,6 +124,18 @@ class UniMessage:
     def reply(cls, message_id: int | str) -> "UniMessage":
         return cls(segments.Reply(str(message_id)))
 
+    def __add__(self, other: Any) -> "UniMessage":
+        result = UniMessage()
+        result.contents = list(self.contents)
+        result.append(other)
+        return result
+
+    def __radd__(self, other: Any) -> "UniMessage":
+        result = UniMessage()
+        result.append(other)
+        result.contents.extend(self.contents)
+        return result
+
     def append(self, item: Any) -> "UniMessage":
         if isinstance(item, UniMessage):
             self.contents.extend(item.contents)
@@ -139,11 +151,19 @@ class UniMessage:
         return common.Message(*self.contents)
 
     async def send(
-        self,
+        self: "UniMessage | str",
+        *args: "UniMessage | str",
         target: Target | None = None,
         actions: Any | None = None,
         event: Any | None = None,
     ) -> Receipt:
+        if args:
+            message = UniMessage()
+            message.append(UniMessage.text(self) if isinstance(self, str) else self)
+            for item in args:
+                message.append(item)
+        else:
+            message = UniMessage.text(self) if isinstance(self, str) else self
         if actions is None:
             actions = _CURRENT_ACTIONS.get(None)
         if event is None:
@@ -152,7 +172,7 @@ class UniMessage:
             if event is None:
                 raise RuntimeError("no target or current event available for sending message")
             target = Target.from_event(event)
-        return await target.send(self, actions)
+        return await target.send(message, actions)
 
     def __str__(self) -> str:
         return str(self.to_message())
@@ -204,7 +224,7 @@ def on_alconna(command: str | Alconna) -> CommandMatcher:
     return Command(command)
 
 
-async def dispatch(event: Any, actions: Any) -> bool:
+async def on_message(event: Any, actions: Any) -> bool:
     handled = False
     for matcher in list(_MATCHERS):
         if await matcher.dispatch(event, actions):
@@ -259,6 +279,8 @@ def _build_handler_kwargs(
             kwargs[name] = actions
         elif name in {"result", "arparma"}:
             kwargs[name] = result
+        elif name == "user_message":
+            kwargs[name] = getattr(event, "message", None)
         elif name in values:
             kwargs[name] = _normalize_value(values[name], parameter.annotation)
         elif parameter.default is inspect.Parameter.empty:
@@ -296,6 +318,6 @@ __all__ = [
     "Receipt",
     "Target",
     "UniMessage",
-    "dispatch",
+    "on_message",
     "on_alconna",
 ]

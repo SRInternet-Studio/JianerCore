@@ -83,8 +83,8 @@ def test_dependency_auto_loads_builtin_alconna(tmp_path):
 def test_unimessage_to_common_message():
     message = (
         UniMessage.text("hi")
-        .append(UniMessage.at("10001"))
-        .append(UniMessage.reply("42"))
+        + UniMessage.at("10001")
+        + UniMessage.reply("42")
     ).to_message()
 
     assert isinstance(message, common.Message)
@@ -133,7 +133,7 @@ def test_command_dispatch_with_alconna_options():
         seen["reason"] = reason
         await UniMessage.text(f"{user}:{reason}").send()
 
-    handled = asyncio.run(alconna.dispatch(event, actions))
+    handled = asyncio.run(alconna.on_message(event, actions))
 
     assert handled is True
     assert seen == {"user": "@u", "reason": "spam"}
@@ -149,7 +149,7 @@ def test_command_does_not_dispatch_when_unmatched():
         called = True
 
     handled = asyncio.run(
-        alconna.dispatch(SimpleNamespace(msg_str="other hi", group_id=1), FakeActions())
+        alconna.on_message(SimpleNamespace(msg_str="other hi", group_id=1), FakeActions())
     )
 
     assert handled is False

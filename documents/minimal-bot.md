@@ -173,7 +173,7 @@ __plugin_meta__ = PluginMetadata(
 
 @Command("ping").handle()
 async def _():
-    await UniMessage.text("pong").send()
+    await UniMessage.send(UniMessage.text("pong"))
 ```
 
 启动：

@@ -103,14 +103,14 @@ class PluginManager:
         return self._load_candidate(plugin_id, candidate, [])
 
     async def dispatch(self, event: Any, actions: Any) -> bool:
-        """Dispatch an event to loaded plugins that expose a dispatch coroutine."""
+        """Dispatch an event to loaded plugins that expose an on_message coroutine."""
 
         handled = False
         for plugin_id in list(self.dependency_order):
             plugin = self.plugins.get(plugin_id)
             if plugin is None:
                 continue
-            dispatcher = getattr(plugin.module, "dispatch", None)
+            dispatcher = getattr(plugin.module, "on_message", None)
             if dispatcher is None:
                 continue
             try:
