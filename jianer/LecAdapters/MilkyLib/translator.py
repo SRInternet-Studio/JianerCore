@@ -3,6 +3,7 @@ from __future__ import annotations
 import httpx
 import json
 import os
+import time
 
 from jianer.network import WebsocketConnection
 from ...utils.logic import Matcher
@@ -207,21 +208,37 @@ class MilkyHttpConnection(WebsocketConnection):
             base_url = "http://" + base_url[len("ws://"):]
         elif base_url.startswith("wss://"):
             base_url = "https://" + base_url[len("wss://"):]
-        try:
-            if self.auth:
-                response = httpx.post(f"{base_url}/api/{endpoint}", json=data,
-                                      headers={"Authorization": f"Bearer {self.auth}"})
-            else:
-                response = httpx.post(f"{base_url}/api/{endpoint}", json=data)
-        except httpx.RequestError as e:
-            return {
-                "status": "failed",
-                "retcode": -1,
-                "msg": str(e),
-                "data": None
-            }
-        try:
-            res = response.json()
+        for attempt in range(3):
+            try:
+                kwargs = {"json": data, "timeout": 15.0}
+                if self.auth:
+                    kwargs["headers"] = {"Authorization": f"Bearer {self.auth}"}
+                response = httpx.post(f"{base_url}/api/{endpoint}", **kwargs)
+            except httpx.RequestError as exc:
+                if attempt < 2:
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                return {
+                    "status": "failed",
+                    "retcode": -1,
+                    "msg": str(exc),
+                    "data": None,
+                }
+
+            try:
+                res = response.json()
+            except json.JSONDecodeError:
+                raw_text = response.text[:500] if isinstance(response.text, str) else ""
+                if response.status_code in (502, 503, 504) and attempt < 2:
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                return {
+                    "status": "failed",
+                    "retcode": response.status_code,
+                    "msg": f"Non-JSON response from /api/{endpoint}",
+                    "data": {"http_status": response.status_code, "raw": raw_text},
+                }
+
             if not isinstance(res, dict):
                 return {
                     "status": "failed",
@@ -234,14 +251,6 @@ class MilkyHttpConnection(WebsocketConnection):
                 res.setdefault("retcode", response.status_code)
                 res.setdefault("msg", f"HTTP {response.status_code} from /api/{endpoint}")
             return res
-        except json.JSONDecodeError:
-            raw_text = response.text[:500] if isinstance(response.text, str) else ""
-            return {
-                "status": "failed",
-                "retcode": response.status_code,
-                "msg": f"Non-JSON response from /api/{endpoint}",
-                "data": {"http_status": response.status_code, "raw": raw_text}
-            }
 
     class MilkyOutGoingSegBuilder:
         def __init__(self) -> None:

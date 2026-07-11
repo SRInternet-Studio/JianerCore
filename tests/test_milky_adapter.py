@@ -219,7 +219,11 @@ def test_milky_http_send_uses_http_api_and_auth_header(monkeypatch):
     assert calls == [
         (
             "http://127.0.0.1:3000/api/send_group_message",
-            {"json": {"group_id": 1, "message": []}, "headers": {"Authorization": "Bearer secret"}},
+            {
+                "json": {"group_id": 1, "message": []},
+                "headers": {"Authorization": "Bearer secret"},
+                "timeout": 15.0,
+            },
         )
     ]
 
@@ -240,6 +244,34 @@ def test_milky_http_send_reports_non_json_response(monkeypatch):
     assert response["status"] == "failed"
     assert response["retcode"] == 502
     assert response["data"]["raw"] == "bad gateway"
+
+
+def test_milky_http_send_retries_transient_non_json_502(monkeypatch):
+    class Response:
+        def __init__(self, status_code, text, payload=None):
+            self.status_code = status_code
+            self.text = text
+            self.payload = payload
+
+        def json(self):
+            if self.payload is None:
+                raise translator.json.JSONDecodeError("bad json", self.text, 0)
+            return self.payload
+
+    responses = [
+        Response(502, ""),
+        Response(502, ""),
+        Response(200, '{"status":"ok"}', {"status": "ok", "retcode": 0, "data": {}}),
+    ]
+    monkeypatch.setattr(translator.httpx, "post", lambda *args, **kwargs: responses.pop(0))
+    monkeypatch.setattr(translator.time, "sleep", lambda seconds: None)
+    connection = MilkyHttpConnection("ws://127.0.0.1:3000")
+
+    response = connection.http_send("send_group_message", {"group_id": 1, "message": []})
+
+    assert response["status"] == "ok"
+    assert response["retcode"] == 0
+    assert responses == []
 
 
 def test_milky_http_send_marks_json_http_errors_as_failed(monkeypatch):
