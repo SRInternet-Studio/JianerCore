@@ -152,7 +152,24 @@ class Actions:
                     data["message_id"] = msg_enid(scene, int(seq), peer_id)
                 else:
                     data["message_id"] = 0
-        logger.info(f"向{(('群 ' + str(group_id)) if group_id else ('用户' + str(user_id))) + ' '}发送：{str(message)}")
+        target = f"群 {group_id}" if group_id is not None else f"用户 {user_id}"
+        if self._is_successful_response(res):
+            logger.info(f"向{target}发送：{str(message)}")
+        else:
+            if not isinstance(res, dict):
+                res = {
+                    "status": "failed",
+                    "retcode": -1,
+                    "message": "Milky API returned an invalid response",
+                    "data": None,
+                    "echo": packet.echo,
+                }
+                reports.put(packet.echo, res)
+            logger.error(
+                f"向{target}发送失败（{endpoint}）："
+                f"status={res.get('status')!r}, retcode={res.get('retcode')!r}, "
+                f"message={res.get('message') or res.get('msg')!r}, data={res.get('data')!r}"
+            )
         return _fetch_ret(packet.echo, MsgSendRsp)
 
     async def del_message(self, message_id: int) -> None:

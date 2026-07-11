@@ -222,6 +222,17 @@ class MilkyHttpConnection(WebsocketConnection):
             }
         try:
             res = response.json()
+            if not isinstance(res, dict):
+                return {
+                    "status": "failed",
+                    "retcode": response.status_code,
+                    "msg": f"Invalid JSON response from /api/{endpoint}",
+                    "data": {"http_status": response.status_code, "raw": response.text[:500]},
+                }
+            if not 200 <= response.status_code < 300:
+                res["status"] = "failed"
+                res.setdefault("retcode", response.status_code)
+                res.setdefault("msg", f"HTTP {response.status_code} from /api/{endpoint}")
             return res
         except json.JSONDecodeError:
             raw_text = response.text[:500] if isinstance(response.text, str) else ""

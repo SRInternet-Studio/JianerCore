@@ -152,6 +152,30 @@ def test_milky_send_retries_without_reply_when_reply_payload_rejected(monkeypatc
     assert calls[1][1]["message"] == [{"type": "text", "data": {"text": "hello"}}]
 
 
+def test_milky_send_returns_and_logs_api_failure(monkeypatch):
+    connection = MilkyHttpConnection("ws://127.0.0.1:3000")
+    failures = []
+
+    monkeypatch.setattr(
+        connection,
+        "http_send",
+        lambda endpoint, data: {
+            "status": "failed",
+            "retcode": 500,
+            "message": "message payload cannot be parsed",
+            "data": None,
+        },
+    )
+    monkeypatch.setattr("jianer.LecAdapters.Milky.logger.error", failures.append)
+
+    response = asyncio.run(Actions(connection).send("hello", group_id=10001))
+
+    assert response.ret_code == 500
+    assert len(failures) == 1
+    assert "向群 10001发送失败" in failures[0]
+    assert "send_group_message" in failures[0]
+
+
 def test_milky_get_stranger_info_uses_endpoint_fallback(monkeypatch):
     connection = MilkyHttpConnection("ws://127.0.0.1:3000")
     calls = []
@@ -216,3 +240,22 @@ def test_milky_http_send_reports_non_json_response(monkeypatch):
     assert response["status"] == "failed"
     assert response["retcode"] == 502
     assert response["data"]["raw"] == "bad gateway"
+
+
+def test_milky_http_send_marks_json_http_errors_as_failed(monkeypatch):
+    class Response:
+        status_code = 401
+        text = '{"message":"unauthorized"}'
+        is_success = False
+
+        def json(self):
+            return {"message": "unauthorized"}
+
+    monkeypatch.setattr(translator.httpx, "post", lambda *args, **kwargs: Response())
+    connection = MilkyHttpConnection("ws://127.0.0.1:3000")
+
+    response = connection.http_send("send_group_message", {"group_id": 1, "message": []})
+
+    assert response["status"] == "failed"
+    assert response["retcode"] == 401
+    assert response["message"] == "unauthorized"
