@@ -4,6 +4,8 @@ import httpx
 import json
 import os
 import time
+from pathlib import Path
+from urllib.parse import unquote
 
 from jianer.network import WebsocketConnection
 from ...utils.logic import Matcher
@@ -49,7 +51,16 @@ def normalize_uri(uri: str | None) -> str | None:
     if len(raw) == 0:
         return raw
     lower = raw.lower()
-    if lower.startswith("file://") or lower.startswith("http://") or lower.startswith("https://") or lower.startswith("base64://"):
+    if lower.startswith("file://"):
+        path = unquote(raw[len("file://"):]).replace("\\", "/")
+        while "//" in path:
+            path = path.replace("//", "/")
+        if len(path) >= 2 and path[1] == ":":
+            path = "/" + path
+        return f"file://{path}"
+    if lower.startswith(("http://", "https://", "base64://")):
+        return raw
+    if "://" in raw:
         return raw
     if len(raw) >= 3 and raw[1] == ":" and (raw[2] == "\\" or raw[2] == "/"):
         path = raw.replace("\\", "/")
@@ -66,6 +77,39 @@ def normalize_uri(uri: str | None) -> str | None:
             path = "/" + path
         return f"file://{path}"
     return raw
+
+
+def _local_path_from_file_uri(uri: str) -> str:
+    path = unquote(uri[len("file://"):])
+    if os.name == "nt":
+        if len(path) >= 3 and path[0] == "/" and path[2] == ":":
+            path = path[1:]
+        return path.replace("/", "\\")
+    return path
+
+
+def _file_uri_from_local_path(path: str) -> str:
+    return Path(path).resolve().as_uri()
+
+
+def prepare_outgoing_media_uri(uri: str | None) -> str | None:
+    normalized = normalize_uri(uri)
+    if normalized is None:
+        return None
+
+    lower = normalized.lower()
+    if lower.startswith(("http://", "https://", "base64://")):
+        return normalized
+    if lower.startswith("file://"):
+        path = _local_path_from_file_uri(normalized)
+    elif "://" in normalized:
+        raise ValueError(f"Unsupported Milky media URI scheme: {normalized.split('://', 1)[0]}")
+    else:
+        path = os.path.abspath(normalized)
+
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"Milky media file does not exist: {path}")
+    return _file_uri_from_local_path(path)
 
 
 def message_translator(milky_message: list[MilkySegment], peer_id: int, scene: int = 0) -> list[dict]:
@@ -277,18 +321,18 @@ class MilkyHttpConnection(WebsocketConnection):
             return self
 
         def image(self, uri: str, summary: str = "[Image]", sub_type: str = "normal") -> 'MilkyOutGoingSegBuilder':
-            normalized_uri = normalize_uri(uri) or ""
+            normalized_uri = prepare_outgoing_media_uri(uri) or ""
             self.segments.append(make_image_segment(normalized_uri, summary, sub_type))
             return self
 
         def record(self, uri: str) -> "MilkyOutGoingSegBuilder":
-            normalized_uri = normalize_uri(uri) or ""
+            normalized_uri = prepare_outgoing_media_uri(uri) or ""
             self.segments.append(make_record_segment(normalized_uri))
             return self
 
         def video(self, uri: str, thumb_uri: str = None) -> "MilkyOutGoingSegBuilder":
-            normalized_uri = normalize_uri(uri) or ""
-            normalized_thumb_uri = normalize_uri(thumb_uri)
+            normalized_uri = prepare_outgoing_media_uri(uri) or ""
+            normalized_thumb_uri = prepare_outgoing_media_uri(thumb_uri)
             self.segments.append(make_video_segment(normalized_uri, normalized_thumb_uri))
             return self
 

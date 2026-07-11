@@ -1,4 +1,5 @@
 import asyncio
+import pytest
 
 from jianer import common
 from jianer.LecAdapters.Milky import Actions
@@ -10,8 +11,10 @@ from jianer.LecAdapters.MilkyLib.translator import (
     message_translator,
     msg_enid,
     normalize_uri,
+    prepare_outgoing_media_uri,
 )
 from jianer.LecAdapters.MilkyLib.types import consume_milky_event, make_reply_segment, make_text_segment
+from jianer.utils import errors
 
 
 class _MilkySegment:
@@ -89,8 +92,25 @@ def test_milky_normalize_uri_handles_windows_drive_paths():
     )
 
 
-def test_milky_normalize_uri_keeps_bare_names_for_milky_resolution():
-    assert normalize_uri("image.bin") == "image.bin"
+def test_milky_prepare_outgoing_media_uri_resolves_bare_local_file(tmp_path, monkeypatch):
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"test-image")
+    monkeypatch.chdir(tmp_path)
+
+    uri = prepare_outgoing_media_uri("image.bin")
+
+    assert uri.startswith("file:///")
+    assert uri.endswith("/image.bin")
+
+
+def test_milky_prepare_outgoing_media_uri_rejects_missing_file():
+    with pytest.raises(FileNotFoundError, match="Milky media file does not exist"):
+        prepare_outgoing_media_uri("missing-local-image.png")
+
+
+def test_milky_prepare_outgoing_media_uri_rejects_unknown_scheme():
+    with pytest.raises(ValueError, match="Unsupported Milky media URI scheme"):
+        prepare_outgoing_media_uri("ftp://example.test/image.png")
 
 
 def test_milky_outgoing_builder_uses_normalized_media_uri(tmp_path):
@@ -127,6 +147,17 @@ def test_milky_send_plain_text_returns_response(monkeypatch):
     ]
 
 
+def test_milky_send_rejects_empty_message_before_http_call(monkeypatch):
+    connection = MilkyHttpConnection("ws://127.0.0.1:3000")
+    calls = []
+    monkeypatch.setattr(connection, "http_send", lambda endpoint, data: calls.append((endpoint, data)))
+
+    with pytest.raises(errors.ArgsInvalidError, match="at least one supported segment"):
+        asyncio.run(Actions(connection).send(common.Message(), group_id=10001))
+
+    assert calls == []
+
+
 def test_milky_send_retries_without_reply_when_reply_payload_rejected(monkeypatch):
     connection = MilkyHttpConnection("ws://127.0.0.1:3000")
     calls = []
@@ -152,7 +183,7 @@ def test_milky_send_retries_without_reply_when_reply_payload_rejected(monkeypatc
     assert calls[1][1]["message"] == [{"type": "text", "data": {"text": "hello"}}]
 
 
-def test_milky_send_returns_and_logs_api_failure(monkeypatch):
+def test_milky_send_raises_and_logs_api_failure(monkeypatch):
     connection = MilkyHttpConnection("ws://127.0.0.1:3000")
     failures = []
 
@@ -168,23 +199,21 @@ def test_milky_send_returns_and_logs_api_failure(monkeypatch):
     )
     monkeypatch.setattr("jianer.LecAdapters.Milky.logger.error", failures.append)
 
-    response = asyncio.run(Actions(connection).send("hello", group_id=10001))
+    with pytest.raises(errors.ActionFailedError, match="Milky send failed"):
+        asyncio.run(Actions(connection).send("hello", group_id=10001))
 
-    assert response.ret_code == 500
     assert len(failures) == 1
     assert "向群 10001发送失败" in failures[0]
     assert "send_group_message" in failures[0]
 
 
-def test_milky_get_stranger_info_uses_endpoint_fallback(monkeypatch):
+def test_milky_get_stranger_info_uses_standard_profile_endpoint(monkeypatch):
     connection = MilkyHttpConnection("ws://127.0.0.1:3000")
     calls = []
 
     def fake_http_send(endpoint, data):
         calls.append((endpoint, data))
-        if len(calls) < 3:
-            return {"status": "failed", "retcode": 404, "data": None}
-        return {"status": "ok", "retcode": 0, "data": {"user_id": 10001, "name": "Tom"}}
+        return {"status": "ok", "retcode": 0, "data": {"name": "Tom"}}
 
     monkeypatch.setattr(connection, "http_send", fake_http_send)
 
@@ -193,7 +222,7 @@ def test_milky_get_stranger_info_uses_endpoint_fallback(monkeypatch):
     assert response.ret_code == 0
     assert response.data.user_id == 10001
     assert response.data.nickname == "Tom"
-    assert [call[0] for call in calls] == ["get_user_profile", "profile", "get_stranger_info"]
+    assert calls == [("get_user_profile", {"user_id": 10001})]
 
 
 def test_milky_http_send_uses_http_api_and_auth_header(monkeypatch):

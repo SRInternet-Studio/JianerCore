@@ -130,7 +130,7 @@ class BotConfig(BaseConfig):
                 for key, value in connections.items():
                     if _canon_protocol(key) == protocol:
                         return self._build_connection(protocol, value)
-        return self._build_connection(protocol, self.connection)
+        return self._build_connection(protocol, getattr(self, "connection", None))
 
     def custom_post(self, **kwargs):
         connections = getattr(self, "connections", None)
@@ -141,21 +141,27 @@ class BotConfig(BaseConfig):
             for protocol, connection in connections.items():
                 parsed_connections[_canon_protocol(protocol)] = self._build_connection(protocol, connection)
             self.connections = parsed_connections
+            if getattr(self, "connection", None) is None:
+                active_protocol = _canon_protocol(getattr(self, "protocol", "OneBot"))
+                active_connection = parsed_connections.get(active_protocol)
+                if active_connection is not None:
+                    self.connection = active_connection
 
-        if isinstance(self.connection, (BotHTTPC, BotWSC, BotFeishuC)):
+        connection = getattr(self, "connection", None)
+        if connection is None or isinstance(connection, (BotHTTPC, BotWSC, BotFeishuC)):
             return
 
         if self.protocol == "OneBot":
-            if _conn_value(self.connection, "mode") == "FWS":
-                self.connection = BotWSC(**self.connection)
-            elif _conn_value(self.connection, "mode") == "HTTPC":
-                self.connection = BotHTTPC(**self.connection)
+            if _conn_value(connection, "mode") == "FWS":
+                self.connection = BotWSC(**connection)
+            elif _conn_value(connection, "mode") == "HTTPC":
+                self.connection = BotHTTPC(**connection)
         elif self.protocol == "Kritor":
-            self.connection = BotWSC(**self.connection)
+            self.connection = BotWSC(**connection)
         elif self.protocol == "Milky":
-            if _conn_value(self.connection, "mode") == "FWS":
-                self.connection = BotWSC(**self.connection)
-            elif _conn_value(self.connection, "mode") == "HTTPC":
-                self.connection = BotHTTPC(**self.connection)
+            if _conn_value(connection, "mode") == "FWS":
+                self.connection = BotWSC(**connection)
+            elif _conn_value(connection, "mode") == "HTTPC":
+                self.connection = BotHTTPC(**connection)
         elif self.protocol == "Feishu":
-            self.connection = BotFeishuC(**self.connection)
+            self.connection = BotFeishuC(**connection)

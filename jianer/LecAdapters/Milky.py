@@ -1,4 +1,4 @@
-from ..utils.hypetyping import Any, NoReturn, TypeVar, Callable
+from ..utils.hypetyping import Any, NoReturn, TypeVar, Callable, Optional
 from ..utils.apiresponse import *
 from ..events import *
 from .. import common, configurator, events, hyperogger, segments
@@ -19,6 +19,8 @@ config = configurator.BotConfig.get("jianer-bot")
 logger = hyperogger.Logger()
 logger.set_level(config.log_level if config else "INFO")
 listener_ran = False
+MILKY_TEXT_CHUNK_LIMIT = 1800
+MILKY_TEXT_RECOVERY_CHUNK_LIMIT = 400
 
 
 def _fetch_ret(echo: str, serializer=ObjectedJson) -> common.Ret:
@@ -50,37 +52,96 @@ class Actions:
     def _is_successful_response(res: Any) -> bool:
         if not isinstance(res, dict):
             return False
-        if res.get("status") == "ok":
-            return True
-        if res.get("retcode") == 0:
-            return True
-        if res.get("code") == 0:
-            return True
-        return False
+        return res.get("status") == "ok" and res.get("retcode") == 0
 
-    def _send_with_endpoint_fallback(self, endpoints: list[str], **payload) -> tuple[Packet, dict]:
-        last_packet: Packet = None
-        last_res: dict = {}
-        for endpoint in endpoints:
+    @staticmethod
+    def _split_text(text: str, limit: int = MILKY_TEXT_CHUNK_LIMIT) -> list[str]:
+        if len(text) <= limit:
+            return [text]
+
+        chunks: list[str] = []
+        current = ""
+        for line in text.splitlines(keepends=True):
+            if len(line) > limit:
+                if current:
+                    chunks.append(current)
+                    current = ""
+                chunks.extend(line[index:index + limit] for index in range(0, len(line), limit))
+                continue
+            if current and len(current) + len(line) > limit:
+                chunks.append(current)
+                current = line
+            else:
+                current += line
+        if current:
+            chunks.append(current)
+        return chunks or [text]
+
+    @staticmethod
+    def _text_chunk_payloads(
+            payload: dict, *, keep_reply: bool = True, limit: int = MILKY_TEXT_CHUNK_LIMIT
+    ) -> Optional[list[dict]]:
+        message = payload.get("message")
+        if not isinstance(message, list):
+            return None
+
+        reply_segment = None
+        text_parts: list[str] = []
+        for segment in message:
+            if not isinstance(segment, dict):
+                return None
+            segment_type = segment.get("type")
+            data = segment.get("data")
+            if segment_type == "reply":
+                if reply_segment is not None:
+                    return None
+                reply_segment = segment
+                continue
+            if segment_type != "text" or not isinstance(data, dict):
+                return None
+            text_parts.append(str(data.get("text", "")))
+
+        chunks = Actions._split_text("".join(text_parts), limit)
+        if len(chunks) <= 1:
+            return None
+
+        payloads: list[dict] = []
+        for index, chunk in enumerate(chunks):
+            chunk_payload = payload.copy()
+            chunk_message = []
+            if index == 0 and keep_reply and reply_segment is not None:
+                chunk_message.append(reply_segment)
+            chunk_message.append(make_text_segment(chunk))
+            chunk_payload["message"] = chunk_message
+            payloads.append(chunk_payload)
+        return payloads
+
+    def _send_text_chunks(
+            self, endpoint: str, payloads: list[dict], *, interval: float = 0
+    ) -> tuple[Packet, dict]:
+        packet: Packet = None
+        res: dict = {}
+        for index, payload in enumerate(payloads):
+            if interval > 0 and index > 0:
+                time.sleep(interval)
             packet = Packet(endpoint, **payload)
             res = packet.send_to(self.connection)
-            last_packet = packet
-            if self._is_successful_response(res):
-                return packet, res
-            last_res = res if isinstance(res, dict) else {}
-        return last_packet, last_res
+            if not self._is_successful_response(res):
+                return packet, res if isinstance(res, dict) else {}
+        return packet, res
 
-    def _send_with_payload_fallback(self, calls: list[tuple[str, dict]]) -> tuple[Packet, dict]:
-        last_packet: Packet = None
-        last_res: dict = {}
-        for endpoint, payload in calls:
-            packet = Packet(endpoint, **payload)
-            res = packet.send_to(self.connection)
-            last_packet = packet
-            if self._is_successful_response(res):
-                return packet, res
-            last_res = res if isinstance(res, dict) else {}
-        return last_packet, last_res
+    @staticmethod
+    def _is_payload_rejection(res: Any) -> bool:
+        if not isinstance(res, dict):
+            return False
+        return res.get("retcode") in (-500, -400, 400, 500)
+
+    def _send_action(self, endpoint: str, **payload) -> tuple[Packet, dict]:
+        packet = Packet(endpoint, **payload)
+        res = packet.send_to(self.connection)
+        if not self._is_successful_response(res):
+            raise errors.ActionFailedError(f"Milky action {endpoint} failed: {res}")
+        return packet, res
 
     @staticmethod
     def _segment_to_outgoing(seg: Any) -> MilkyOutgoingSegment:
@@ -108,7 +169,35 @@ class Actions:
             return builder.record(seg.file).build()[0]
         if isinstance(seg, segments.Video):
             return builder.video(seg.file).build()[0]
-        return make_text_segment(str(seg))
+        if hasattr(seg, "text"):
+            return make_text_segment(str(getattr(seg, "text")))
+        raise ValueError(f"Unsupported Milky outgoing segment type: {type(seg).__name__}")
+
+    @staticmethod
+    def _json_segment_to_outgoing(segment: dict) -> MilkyOutgoingSegment:
+        if not isinstance(segment, dict) or not isinstance(segment.get("data"), dict):
+            raise ValueError("Forward node content must contain message segment objects.")
+        segment_type = segment.get("type")
+        data = segment["data"]
+        builder = MilkyOutGoingSegBuilder()
+        if segment_type == "text":
+            return builder.text(str(data.get("text", ""))).build()[0]
+        if segment_type == "at":
+            qq = data.get("qq")
+            return (builder.mention_all() if str(qq) == "all" else builder.mention(int(qq))).build()[0]
+        if segment_type == "reply":
+            message_id = int(data.get("id"))
+            seq = msg_deid(message_id)[1] if message_id >= (1 << 64) else message_id
+            return builder.reply(seq).build()[0]
+        if segment_type == "face":
+            return builder.face(str(data.get("id"))).build()[0]
+        if segment_type == "image":
+            return builder.image(data.get("file"), data.get("summary", "[Image]")).build()[0]
+        if segment_type == "record":
+            return builder.record(data.get("file")).build()[0]
+        if segment_type == "video":
+            return builder.video(data.get("file")).build()[0]
+        raise ValueError(f"Unsupported Milky forward-node segment type: {segment_type}")
 
     async def send(
             self, message: Union[common.Message, str], group_id: int = None, user_id: int = None
@@ -117,7 +206,13 @@ class Actions:
             message = common.Message(segments.Text(message))
         outgoing: list[MilkyOutgoingSegment] = []
         for seg in message:
-            outgoing.append(self._segment_to_outgoing(seg))
+            try:
+                outgoing.append(self._segment_to_outgoing(seg))
+            except (FileNotFoundError, OSError, TypeError, ValueError) as exc:
+                raise errors.ArgsInvalidError(f"Invalid Milky outgoing segment {seg}: {exc}") from exc
+        if len(outgoing) == 0:
+            raise errors.ArgsInvalidError("Milky message must contain at least one supported segment.")
+
         if group_id is not None:
             scene = 1
             peer_id = int(group_id)
@@ -131,119 +226,118 @@ class Actions:
         else:
             raise errors.ArgsInvalidError("'send' API requires 'group_id' or 'user_id' but none of them are provided.")
 
-        packet = Packet(endpoint, **payload)
-        res = packet.send_to(self.connection)
-        if (not self._is_successful_response(res)) and any(isinstance(i, dict) and i.get("type") == "reply" for i in outgoing):
-            fallback_outgoing = [i for i in outgoing if not (isinstance(i, dict) and i.get("type") == "reply")]
-            if len(fallback_outgoing) == 0:
-                fallback_outgoing = [make_text_segment("")]
-            fallback_payload = payload.copy()
-            fallback_payload["message"] = fallback_outgoing
-            fallback_packet = Packet(endpoint, **fallback_payload)
-            fallback_res = fallback_packet.send_to(self.connection)
-            if self._is_successful_response(fallback_res):
-                packet = fallback_packet
-                res = fallback_res
-        if isinstance(res, dict) and isinstance(res.get("data"), dict):
-            data = res["data"]
-            if "message_id" not in data:
-                seq = data.get("message_seq")
-                if seq is not None:
-                    data["message_id"] = msg_enid(scene, int(seq), peer_id)
-                else:
-                    data["message_id"] = 0
-        target = f"群 {group_id}" if group_id is not None else f"用户 {user_id}"
-        if self._is_successful_response(res):
-            logger.info(f"向{target}发送：{str(message)}")
+        chunk_payloads = self._text_chunk_payloads(payload)
+        if chunk_payloads is not None:
+            logger.warning(f"Milky text message is too long; split into {len(chunk_payloads)} chunks")
+            packet, res = self._send_text_chunks(endpoint, chunk_payloads)
         else:
-            if not isinstance(res, dict):
-                res = {
-                    "status": "failed",
-                    "retcode": -1,
-                    "message": "Milky API returned an invalid response",
-                    "data": None,
-                    "echo": packet.echo,
-                }
-                reports.put(packet.echo, res)
+            packet = Packet(endpoint, **payload)
+            res = packet.send_to(self.connection)
+
+        if self._is_payload_rejection(res) and any(
+                isinstance(item, dict) and item.get("type") == "reply" for item in outgoing
+        ):
+            fallback_outgoing = [i for i in outgoing if not (isinstance(i, dict) and i.get("type") == "reply")]
+            if fallback_outgoing:
+                fallback_payload = payload.copy()
+                fallback_payload["message"] = fallback_outgoing
+                fallback_chunks = self._text_chunk_payloads(fallback_payload, keep_reply=False)
+                if fallback_chunks is not None:
+                    fallback_packet, fallback_res = self._send_text_chunks(endpoint, fallback_chunks)
+                else:
+                    fallback_packet = Packet(endpoint, **fallback_payload)
+                    fallback_res = fallback_packet.send_to(self.connection)
+                if self._is_successful_response(fallback_res):
+                    packet, res = fallback_packet, fallback_res
+
+        if not self._is_successful_response(res):
+            recovery_payload = payload.copy()
+            recovery_payload["message"] = [
+                item for item in outgoing
+                if not (isinstance(item, dict) and item.get("type") == "reply")
+            ]
+            recovery_chunks = self._text_chunk_payloads(
+                recovery_payload,
+                keep_reply=False,
+                limit=MILKY_TEXT_RECOVERY_CHUNK_LIMIT,
+            )
+            if recovery_chunks is not None:
+                logger.warning(
+                    f"Milky text send failed; retrying as {len(recovery_chunks)} smaller chunks"
+                )
+                recovery_packet, recovery_res = self._send_text_chunks(
+                    endpoint, recovery_chunks, interval=0.2
+                )
+                if self._is_successful_response(recovery_res):
+                    packet, res = recovery_packet, recovery_res
+
+        target = f"群 {group_id}" if group_id is not None else f"用户 {user_id}"
+        if not self._is_successful_response(res):
             logger.error(
                 f"向{target}发送失败（{endpoint}）："
-                f"status={res.get('status')!r}, retcode={res.get('retcode')!r}, "
-                f"message={res.get('message') or res.get('msg')!r}, data={res.get('data')!r}"
+                f"status={res.get('status') if isinstance(res, dict) else None!r}, "
+                f"retcode={res.get('retcode') if isinstance(res, dict) else None!r}, "
+                f"message={(res.get('message') or res.get('msg')) if isinstance(res, dict) else res!r}, "
+                f"data={res.get('data') if isinstance(res, dict) else None!r}"
             )
+            raise errors.ActionFailedError(f"Milky send failed via {endpoint}: {res}")
+
+        data = res.get("data") if isinstance(res, dict) else None
+        if not isinstance(data, dict) or data.get("message_seq") is None:
+            raise errors.ActionFailedError(f"Milky send returned no message_seq via {endpoint}: {res}")
+        data["message_id"] = msg_enid(scene, int(data["message_seq"]), peer_id)
+        logger.info(f"向{target}发送：{str(message)}")
         return _fetch_ret(packet.echo, MsgSendRsp)
 
     async def del_message(self, message_id: int) -> None:
         enid = int(message_id)
         if enid < (1 << 64):
-            Packet(
-                "delete_msg",
-                message_id=enid,
-            ).send_to(self.connection)
-            logger.info(f"撤回 {message_id}")
-            return
+            raise errors.ArgsInvalidError(
+                "Milky recall requires an encoded message_id containing scene, peer_id, and message_seq."
+            )
 
         scene, seq, peer_id = msg_deid(enid)
         if scene == 1:
-            Packet(
+            self._send_action(
                 "recall_group_message",
                 group_id=peer_id,
                 message_seq=seq
-            ).send_to(self.connection)
-        else:
-            Packet(
+            )
+        elif scene == 0:
+            self._send_action(
                 "recall_private_message",
                 user_id=peer_id,
                 message_seq=seq
-            ).send_to(self.connection)
+            )
+        else:
+            raise errors.ArgsInvalidError(f"Unsupported Milky message scene: {scene}")
         logger.info(f"撤回 {message_id}")
 
     async def set_group_kick(self, group_id: int, user_id: int) -> None:
-        self._send_with_payload_fallback([
-            ("kick_group_member", {
-                "group_id": group_id,
-                "user_id": user_id,
-                "reject_add_request": True
-            }),
-            ("kick", {
-                "group_id": group_id,
-                "user_id": user_id,
-                "reject_add_request": True
-            }),
-            ("set_group_kick", {
-                "group_id": group_id,
-                "user_id": user_id,
-                "reject_add_request": True
-            }),
-            ("set_group_kick", {
-                "group_id": group_id,
-                "user_id": user_id
-            }),
-        ])
+        self._send_action(
+            "kick_group_member",
+            group_id=int(group_id),
+            user_id=int(user_id),
+            reject_add_request=True,
+        )
         logger.info(f"将用户 {user_id} 移出群 {group_id}")
 
     async def set_group_ban(self, group_id: int, user_id: int, duration: int = 60) -> None:
-        self._send_with_payload_fallback([
-            ("set_group_member_mute", {
-                "group_id": group_id,
-                "user_id": user_id,
-                "duration": duration
-            }),
-            ("mute", {
-                "group_id": group_id,
-                "user_id": user_id,
-                "duration": duration
-            }),
-            ("set_group_ban", {
-                "group_id": group_id,
-                "user_id": user_id,
-                "duration": duration
-            }),
-        ])
+        self._send_action(
+            "set_group_member_mute",
+            group_id=int(group_id),
+            user_id=int(user_id),
+            duration=int(duration),
+        )
         logger.info(f"在群 {group_id} 将用户 {user_id} 禁言 {duration}s")
 
     async def get_login_info(self) -> common.Ret[GetLoginInfoRsp]:
         packet = Packet("get_login_info")
-        packet.send_to(self.connection)
+        res = packet.send_to(self.connection)
+        if isinstance(res, dict) and isinstance(res.get("data"), dict):
+            data = res["data"]
+            if data.get("user_id") is None and data.get("uin") is not None:
+                data["user_id"] = int(data["uin"])
         return _fetch_ret(packet.echo, GetLoginInfoRsp)
 
     async def get_version_info(self) -> common.Ret[GetVerInfoRsp]:
@@ -257,26 +351,78 @@ class Actions:
         return _fetch_ret(packet.echo, GetVerInfoRsp)
 
     async def send_forward_msg(self, message: common.Message) -> common.Ret[SendForwardRsp]:
-        ...
+        raise errors.ArgsInvalidError(
+            "Milky send_forward_msg requires a target; use send_group_forward_msg for group messages."
+        )
 
     async def get_forward_msg(self, sid: str) -> common.Ret[common.Message]:
-        ...
+        packet = Packet("get_forwarded_messages", forward_id=str(sid))
+        res = packet.send_to(self.connection)
+        if isinstance(res, dict) and isinstance(res.get("data"), dict):
+            nodes = []
+            for item in res["data"].get("messages", []):
+                if not isinstance(item, dict):
+                    continue
+                onebot_segments = message_translator(
+                    consume_segments(item.get("segments")), peer_id=0, scene=0
+                )
+                nodes.append(segments.Node(
+                    str(item.get("user_id", 0)),
+                    str(item.get("sender_name", "")),
+                    events.gen_message({"message": onebot_segments}),
+                ))
+            res["data"] = common.Message(*nodes)
+        return _fetch_ret(packet.echo, lambda data: data)
 
     async def forward_solve(self, message: common.Message) -> common.Message:
-        ...
+        return message
 
     async def send_group_forward_msg(self, group_id: int, message: common.Message) -> common.Ret[SendGrpForwardRsp]:
-        ...
+        nodes = []
+        for node in message:
+            if isinstance(node, segments.CustomNode):
+                node_data = node.to_json().get("data", {})
+                user_id = node_data.get("user_id")
+                sender_name = node_data.get("sender_name") or node_data.get("nickname") or node_data.get("nick_name")
+                content = node_data.get("content", [])
+            elif isinstance(node, segments.Node):
+                user_id = node.user_id
+                sender_name = node.nickname
+                content = node.content.get_sync() if isinstance(node.content, common.Message) else node.content
+            else:
+                raise errors.ArgsInvalidError(
+                    f"Milky forward messages require Node or CustomNode segments, got {type(node).__name__}."
+                )
+            if not isinstance(content, list) or len(content) == 0:
+                raise errors.ArgsInvalidError("Milky forward node content must not be empty.")
+            outgoing_segments = [self._json_segment_to_outgoing(item) for item in content]
+            nodes.append(MilkyOutGoingSegBuilder.outgoing_forward(
+                int(user_id), str(sender_name or user_id), outgoing_segments
+            ))
+
+        if len(nodes) == 0:
+            raise errors.ArgsInvalidError("Milky forward message must contain at least one node.")
+        outgoing = MilkyOutGoingSegBuilder().forward(nodes).build()
+        packet, res = self._send_action(
+            "send_group_message", group_id=int(group_id), message=outgoing
+        )
+        data = res.get("data") if isinstance(res, dict) else None
+        if not isinstance(data, dict) or data.get("message_seq") is None:
+            raise errors.ActionFailedError(f"Milky forward send returned no message_seq: {res}")
+        data["message_id"] = msg_enid(1, int(data["message_seq"]), int(group_id))
+        data.setdefault("forward_id", "")
+        return _fetch_ret(packet.echo, SendGrpForwardRsp)
 
     async def set_group_add_request(self, flag: str, sub_type: str, approve: bool,
                                     reason: str = "Not Mentioned") -> None:
-        ...
+        raise errors.ArgsInvalidError(
+            "Milky group-request handling requires notification_seq, notification_type, "
+            "group_id, and is_filtered; the legacy OneBot flag signature cannot represent them."
+        )
 
     async def get_stranger_info(self, user_id: int) -> common.Ret[GetStrInfoRsp]:
-        packet, res = self._send_with_endpoint_fallback(
-            ["get_user_profile", "profile", "get_stranger_info"],
-            user_id=user_id
-        )
+        packet = Packet("get_user_profile", user_id=int(user_id))
+        res = packet.send_to(self.connection)
         if isinstance(res, dict) and isinstance(res.get("data"), dict):
             data = res["data"]
             data["user_id"] = data.get("user_id") or data.get("userId") or data.get("uid") or int(user_id)
@@ -294,7 +440,29 @@ class Actions:
             group_id=group_id,
             user_id=user_id
         )
-        packet.send_to(self.connection)
+        res = packet.send_to(self.connection)
+        if isinstance(res, dict) and isinstance(res.get("data"), dict):
+            wrapper = res["data"]
+            member = wrapper.get("member") if isinstance(wrapper.get("member"), dict) else wrapper
+            normalized = {
+                "group_id": int(member.get("group_id") or group_id),
+                "user_id": int(member.get("user_id") or user_id),
+                "nickname": member.get("nickname") or member.get("name") or "",
+                "card": member.get("card") or "",
+                "sex": member.get("sex") or "unknown",
+                "age": member.get("age") or 0,
+                "area": member.get("area") or "",
+                "join_time": int(member.get("join_time") or 0),
+                "last_sent_time": int(member.get("last_sent_time") or 0),
+                "level": str(member.get("level") or ""),
+                "role": member.get("role") or "member",
+                "unfriendly": bool(member.get("unfriendly", False)),
+                "title": member.get("title") or "",
+                "title_expire_time": int(member.get("title_expire_time") or 0),
+                "card_changeable": bool(member.get("card_changeable", True)),
+            }
+            wrapper.clear()
+            wrapper.update(normalized)
         return _fetch_ret(packet.echo, GetGrpMemInfoRsp)
 
     async def get_group_info(self, group_id: int) -> common.Ret[GetGrpInfoRsp]:
@@ -302,89 +470,75 @@ class Actions:
             "get_group_info",
             group_id=group_id
         )
-        packet.send_to(self.connection)
+        res = packet.send_to(self.connection)
+        if isinstance(res, dict) and isinstance(res.get("data"), dict):
+            wrapper = res["data"]
+            group = wrapper.get("group") if isinstance(wrapper.get("group"), dict) else wrapper
+            normalized = {
+                "group_id": int(group.get("group_id") or group_id),
+                "group_name": group.get("group_name") or group.get("name") or "",
+                "member_count": int(group.get("member_count") or 0),
+                "max_member_count": int(group.get("max_member_count") or 0),
+            }
+            wrapper.clear()
+            wrapper.update(normalized)
         return _fetch_ret(packet.echo, GetGrpInfoRsp)
 
     async def get_status(self) -> common.Ret:
-        packet = Packet("get_status")
-        packet.send_to(self.connection)
+        packet = Packet("get_login_info")
+        res = packet.send_to(self.connection)
+        if isinstance(res, dict) and self._is_successful_response(res):
+            res["data"] = {"online": True, "good": True}
         return _fetch_ret(packet.echo)
 
     async def set_essence_msg(self, message_id: int) -> None:
         enid = int(message_id)
-        calls: list[tuple[str, dict]] = []
-        if enid >= (1 << 64):
-            scene, seq, peer_id = msg_deid(enid)
-            if scene == 1:
-                calls.extend([
-                    ("set_group_essence_message", {
-                        "group_id": int(peer_id),
-                        "message_seq": int(seq),
-                        "is_set": True
-                    }),
-                    ("set_group_essence_message", {
-                        "group_id": int(peer_id),
-                        "message_seq": int(seq)
-                    }),
-                ])
-        calls.extend([
-            ("set_essence_msg", {"message_id": enid}),
-        ])
-        self._send_with_payload_fallback(calls)
+        if enid < (1 << 64):
+            raise errors.ArgsInvalidError(
+                "Milky essence actions require an encoded group message_id."
+            )
+        scene, seq, peer_id = msg_deid(enid)
+        if scene != 1:
+            raise errors.ArgsInvalidError("Only group messages can be marked as essence messages.")
+        self._send_action(
+            "set_group_essence_message",
+            group_id=int(peer_id),
+            message_seq=int(seq),
+            is_set=True,
+        )
 
     async def set_group_special_title(self, group_id: int, user_id: int, title: str) -> None:
-        self._send_with_payload_fallback([
-            ("set_group_member_special_title", {
-                "group_id": group_id,
-                "user_id": user_id,
-                "special_title": title
-            }),
-            ("set_group_special_title", {
-                "group_id": group_id,
-                "user_id": user_id,
-                "special_title": title
-            }),
-            ("set_group_special_title", {
-                "group_id": group_id,
-                "user_id": user_id,
-                "title": title
-            }),
-        ])
+        self._send_action(
+            "set_group_member_special_title",
+            group_id=int(group_id),
+            user_id=int(user_id),
+            special_title=str(title),
+        )
 
     async def get_msg(self, msg_id: int) -> common.Ret[GetMsgRsp]:
-        req_calls: list[tuple[str, dict]] = []
         enid = int(msg_id)
-        if enid >= (1 << 64):
-            scene, seq, peer_id = msg_deid(enid)
-            if scene == 1:
-                req_calls.append(("get_message", {
-                    "message_scene": "group",
-                    "peer_id": int(peer_id),
-                    "message_seq": int(seq)
-                }))
-            else:
-                req_calls.extend([
-                    ("get_message", {
-                        "message_scene": "friend",
-                        "peer_id": int(peer_id),
-                        "message_seq": int(seq)
-                    }),
-                    ("get_message", {
-                        "message_scene": "private",
-                        "peer_id": int(peer_id),
-                        "message_seq": int(seq)
-                    }),
-                ])
-        req_calls.extend([
-            ("get_message", {"message_id": enid}),
-            ("get_msg", {"message_id": enid}),
-        ])
-        packet, res = self._send_with_payload_fallback(req_calls)
+        if enid < (1 << 64):
+            raise errors.ArgsInvalidError(
+                "Milky get_msg requires an encoded message_id containing scene, peer_id, and message_seq."
+            )
+        scene, seq, peer_id = msg_deid(enid)
+        if scene not in (0, 1):
+            raise errors.ArgsInvalidError(f"Unsupported Milky message scene: {scene}")
+        packet = Packet(
+            "get_message",
+            message_scene="group" if scene == 1 else "friend",
+            peer_id=int(peer_id),
+            message_seq=int(seq),
+        )
+        res = packet.send_to(self.connection)
         if isinstance(res, dict) and isinstance(res.get("data"), dict):
             data = res["data"]
             if isinstance(data.get("message"), dict):
                 message_data = data["message"]
-                for key in ("time", "message_scene", "peer_id", "message_seq", "sender_id", "segments", "friend", "group_member"):
+                for key in (
+                        "time", "message_scene", "peer_id", "message_seq", "sender_id",
+                        "segments", "friend", "group_member"
+                ):
                     if data.get(key) is None and message_data.get(key) is not None:
                         data[key] = message_data.get(key)
             scene_value = data.get("message_scene") or data.get("scene") or data.get("message_type")
@@ -431,17 +585,16 @@ class Actions:
                         "age": 0
                     }
 
-            if data.get("message") is None:
-                segments_data = data.get("segments")
-                milky_segments = consume_segments(segments_data)
-                if len(milky_segments) > 0:
-                    if scene is None:
-                        scene = 1 if message_type == "group" else 0
-                    data["message"] = message_translator(milky_segments, int(peer_id or 0), int(scene))
+            milky_segments = consume_segments(data.get("segments"))
+            data["message"] = message_translator(
+                milky_segments,
+                int(peer_id or 0),
+                int(scene if scene is not None else (1 if message_type == "group" else 0)),
+            )
         return _fetch_ret(packet.echo, GetMsgRsp)
 
     async def send_callback(self, group_id: int, bot_id: int, data: dict) -> None:
-        ...
+        raise errors.ArgsInvalidError("Milky does not define a send_callback API.")
 
 
 async def tester(
