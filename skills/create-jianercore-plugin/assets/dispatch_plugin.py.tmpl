@@ -1,0 +1,27 @@
+"""JianerCore plugin: $plugin_id."""
+
+from jianer import common, segments
+from jianer.plugins import PluginMetadata
+
+
+__plugin_meta__ = PluginMetadata(
+    name=$plugin_id_literal,
+    description=$description_literal,
+    usage=$usage_literal,
+)
+
+
+async def on_message(event, actions):
+    if getattr(event, "msg_str", "") != $command_literal:
+        return False
+
+    message = common.Message(segments.Text($reply_literal))
+    group_id = getattr(event, "group_id", None)
+    if group_id is not None:
+        await actions.send(message, group_id=group_id)
+    else:
+        user_id = getattr(event, "user_id", None)
+        if user_id is None:
+            return False
+        await actions.send(message, user_id=user_id)
+    return True

@@ -1,0 +1,53 @@
+import asyncio
+from pathlib import Path
+from types import SimpleNamespace
+
+from jianer.plugins import PluginManager
+from jianer.plugins.builtin import alconna
+
+
+PLUGIN_PATH = $plugin_path_expression
+
+
+class FakeActions:
+    def __init__(self):
+        self.sent = []
+
+    async def send(self, message, group_id=None, user_id=None):
+        self.sent.append((message, group_id, user_id))
+        return SimpleNamespace(data={"message_id": len(self.sent)})
+
+
+def test_$test_name():
+    alconna._clear_matchers()
+    try:
+        manager = PluginManager()
+        plugin = manager.load_plugin(PLUGIN_PATH)
+        assert plugin is not None
+        assert plugin.name == $plugin_id_literal
+        assert manager.failed == []
+
+        actions = FakeActions()
+        event = SimpleNamespace(
+            msg_str=$command_literal,
+            message=None,
+            group_id=123,
+            user_id=456,
+        )
+        handled = asyncio.run(manager.dispatch(event, actions))
+
+        assert handled is True
+        assert len(actions.sent) == 1
+        assert actions.sent[0][0][0].text == $reply_literal
+        assert actions.sent[0][1:] == (123, None)
+
+        unmatched = SimpleNamespace(
+            msg_str="__not_a_match__",
+            message=None,
+            group_id=123,
+            user_id=456,
+        )
+        assert asyncio.run(manager.dispatch(unmatched, actions)) is False
+        assert len(actions.sent) == 1
+    finally:
+        alconna._clear_matchers()

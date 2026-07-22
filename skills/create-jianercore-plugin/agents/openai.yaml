@@ -1,0 +1,4 @@
+interface:
+  display_name: "Create JianerCore Plugin"
+  short_description: "Create and validate JianerCore plugins"
+  default_prompt: "Use $create-jianercore-plugin to create a tested JianerCore plugin in this project."
