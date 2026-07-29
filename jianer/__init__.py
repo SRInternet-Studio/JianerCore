@@ -11,6 +11,14 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Union
 
+from .asyncio_runner import (
+    AsyncioRunner,
+    get_dispatch_runner,
+    request_dispatch_runner_shutdown,
+    run_awaitable,
+    shutdown_dispatch_runner,
+    submit_awaitable,
+)
 from .plugins.runtime import (
     PluginManagerState,
     ShutdownReport,
@@ -206,8 +214,11 @@ class Client:
             if self.records:
                 self.lis.run()
         finally:
-            if not self._closed:
-                self.close()
+            try:
+                if not self._closed:
+                    self.close()
+            finally:
+                shutdown_dispatch_runner()
 
     def restart(self) -> None:
         try:
@@ -307,7 +318,10 @@ class Client:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return asyncio.run(self.aclose())
+            try:
+                return run_awaitable(self.aclose())
+            finally:
+                shutdown_dispatch_runner()
         raise RuntimeError(
             "Client.close() cannot run inside an event loop; "
             "use 'await client.aclose()'"

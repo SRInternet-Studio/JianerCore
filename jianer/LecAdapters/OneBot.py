@@ -6,6 +6,7 @@ import sys
 import subprocess
 
 from .. import network, events, common, segments
+from ..asyncio_runner import run_awaitable
 from ..service import FuncCall, IServiceBase, IServiceStartUp
 from ..utils import errors, logic
 from ..utils.apiresponse import *
@@ -361,9 +362,9 @@ def __handler(data: Union[dict, HyperNotify], actions: Actions) -> None:
                 "conversation_id",
                 event_data.get("group_id") if event_data.get("group_id") is not None else event_data.get("user_id"),
             )
-            asyncio.run(handler(events.em.new(event_data), actions))
+            run_awaitable(handler(events.em.new(event_data), actions))
     else:
-        asyncio.run(handler(data, actions))
+        run_awaitable(handler(data, actions))
 
 
 handler: callable = tester
@@ -410,7 +411,7 @@ def run() -> NoReturn:
         if config.connection.ob_auto_startup:
             LagrangeOneBotService(IServiceStartUp.MANUAL).run_in_thread(config)
 
-        while True:
+        while listener_ran:
             try:
                 connection.connect()
             except ConnectionRefusedError or TimeoutError:
@@ -431,7 +432,7 @@ def run() -> NoReturn:
                 connection=connection
             )
             threading.Thread(target=lambda: __handler(data, actions), daemon=True).start()
-            while True:
+            while listener_ran:
                 try:
                     data = connection.recv()
                 except ConnectionResetError:
@@ -451,6 +452,8 @@ def run() -> NoReturn:
 
 
 def stop() -> None:
+    global listener_ran
+    listener_ran = False
     try:
         connection.close()
     except:

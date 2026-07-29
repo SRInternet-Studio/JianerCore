@@ -16,6 +16,7 @@ from ..utils.hypetyping import Any, NoReturn, Union
 from ..utils.apiresponse import *
 from ..events import *
 from .. import common, configurator, events, hyperogger, segments
+from ..asyncio_runner import run_awaitable
 from ..utils import errors
 from .FeishuLib.client import FeishuClient
 from .FeishuLib.translator import (
@@ -519,9 +520,9 @@ async def tester(message_data: Union[Event, HyperNotify], actions: Actions) -> N
 
 def __handler(data: Union[dict, HyperNotify], actions: Actions) -> None:
     if isinstance(data, dict):
-        asyncio.run(handler(events.em.new(data), actions))
+        run_awaitable(handler(events.em.new(data), actions))
     else:
-        asyncio.run(handler(data, actions))
+        run_awaitable(handler(data, actions))
 
 
 handler: callable = tester
@@ -623,10 +624,11 @@ class FeishuLongConnectionWorker:
 
 
 event_server: FeishuEventServer | None = None
+active_event_queue: queue.Queue | None = None
 
 
 def run() -> NoReturn:
-    global listener_ran, event_server
+    global listener_ran, event_server, active_event_queue
     listener_ran = True
     if handler is tester:
         raise errors.ListenerNotRegisteredError("No handler registered")
@@ -634,6 +636,7 @@ def run() -> NoReturn:
     client = FeishuClient(config)
     actions = Actions(client)
     event_queue = queue.Queue()
+    active_event_queue = event_queue
 
     event_mode = client.event_mode
     if event_mode in {"long_connection", "long", "ws", "websocket"}:
@@ -668,6 +671,8 @@ def run() -> NoReturn:
 
     while listener_ran:
         payload = event_queue.get() if event_mode in {"long_connection", "long", "ws", "websocket"} else event_server.queue.get()
+        if payload is None or not listener_ran:
+            break
         event_data = build_hyper_event(payload, client.bot_open_id)
         if event_data is None:
             continue
@@ -677,3 +682,7 @@ def run() -> NoReturn:
 def stop() -> None:
     global listener_ran
     listener_ran = False
+    if active_event_queue is not None:
+        active_event_queue.put(None)
+    if event_server is not None:
+        event_server.queue.put(None)

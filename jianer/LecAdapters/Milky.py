@@ -2,6 +2,7 @@ from ..utils.hypetyping import Any, NoReturn, TypeVar, Callable, Optional
 from ..utils.apiresponse import *
 from ..events import *
 from .. import common, configurator, events, hyperogger, segments
+from ..asyncio_runner import run_awaitable
 from ..utils import errors
 from ..utils.typextensions import ObjectedJson
 
@@ -790,9 +791,9 @@ def __handler(data: Union[dict, HyperNotify], actions: Actions) -> None:
             "conversation_id",
             event_data.get("group_id") if event_data.get("group_id") not in (None, 0, "0") else event_data.get("user_id"),
         )
-        asyncio.run(handler(events.em.new(event_data), actions))
+        run_awaitable(handler(events.em.new(event_data), actions))
     else:
-        asyncio.run(handler(data, actions))
+        run_awaitable(handler(data, actions))
 
 
 handler: callable = tester
@@ -825,7 +826,7 @@ def run() -> NoReturn:
             )
         retried = 0
 
-        while True:
+        while listener_ran:
             try:
                 connection.connect()
             except (ConnectionRefusedError, TimeoutError):
@@ -846,7 +847,7 @@ def run() -> NoReturn:
                 connection=connection
             )
             threading.Thread(target=lambda: __handler(data, actions), daemon=True).start()
-            while True:
+            while listener_ran:
                 try:
                     data = connection.recv()
                 except ConnectionResetError:
@@ -866,4 +867,9 @@ def run() -> NoReturn:
 
 
 def stop() -> None:
-    ...
+    global listener_ran
+    listener_ran = False
+    try:
+        connection.close()
+    except Exception:
+        pass

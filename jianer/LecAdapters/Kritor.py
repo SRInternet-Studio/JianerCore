@@ -5,6 +5,7 @@ import threading
 import time
 
 from .. import common
+from ..asyncio_runner import run_awaitable
 from ..LecAdapters.OneBot import Actions as OneBotActions
 from ..LecAdapters.KritorLib.Res import event_queue, to_protos, message_ids
 from ..events import Event, HyperNotify, HyperListenerStartNotify, em
@@ -188,9 +189,9 @@ def _handler(data: Union[dict, HyperNotify], actions: Actions) -> None:
                 "conversation_id",
                 event_data.get("group_id") if event_data.get("group_id") is not None else event_data.get("user_id"),
             )
-            asyncio.run(handler(em.new(event_data), actions))
+            run_awaitable(handler(em.new(event_data), actions))
     else:
-        asyncio.run(handler(data, actions))
+        run_awaitable(handler(data, actions))
 
 
 handler: callable = tester
@@ -241,7 +242,7 @@ def run():
             port=config.connection.port,
         )
         retried = 0
-        while True:
+        while listener_ran:
             try:
                 connection.connect()
             except ConnectionRefusedError or TimeoutError:
@@ -265,7 +266,7 @@ def run():
             )
             threading.Thread(target=lambda: _handler(data, actions), daemon=True).start()
             task = None
-            while True:
+            while listener_ran:
                 try:
                     task = connection.recv()
                     KritorEventGettingService(IServiceStartUp.MANUAL).set_actions(actions).run_in_thread()
@@ -286,6 +287,8 @@ def run():
 
 
 def stop() -> None:
+    global listener_ran
+    listener_ran = False
     try:
         connection.close()
     except:
