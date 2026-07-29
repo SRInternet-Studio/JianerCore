@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextvars
 import inspect
+import threading
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -11,6 +12,7 @@ from arclet.alconna import Alconna, Args, Arparma, MultiVar
 
 from .... import common, segments
 from ...metadata import PluginMetadata
+from ...runtime import current_plugin_owner
 
 __plugin_meta__ = PluginMetadata(
     name="jianerbot-plugin-alconna",
@@ -19,7 +21,9 @@ __plugin_meta__ = PluginMetadata(
 
 _CURRENT_EVENT: contextvars.ContextVar[Any] = contextvars.ContextVar("jianer_alconna_event")
 _CURRENT_ACTIONS: contextvars.ContextVar[Any] = contextvars.ContextVar("jianer_alconna_actions")
-_MATCHERS: list["CommandMatcher"] = []
+_MATCHERS: dict[str, dict[str, list["CommandMatcher"]]] = {}
+_LEGACY_MATCHERS: list["CommandMatcher"] = []
+_MATCHER_LOCK = threading.RLock()
 
 
 @dataclass(frozen=True)
@@ -188,8 +192,7 @@ class CommandMatcher:
     def handle(self) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
             self.handlers.append(func)
-            if self not in _MATCHERS:
-                _MATCHERS.append(self)
+            _register_matcher(self)
             return func
 
         return decorator
@@ -226,7 +229,7 @@ def on_alconna(command: str | Alconna) -> CommandMatcher:
 
 async def on_message(event: Any, actions: Any) -> bool:
     handled = False
-    for matcher in list(_MATCHERS):
+    for matcher in _matchers_for_current_manager():
         if await matcher.dispatch(event, actions):
             handled = True
             break
@@ -309,7 +312,54 @@ def _normalize_value(value: Any, annotation: Any) -> Any:
 def _clear_matchers() -> None:
     """Test helper for clearing global command registrations."""
 
-    _MATCHERS.clear()
+    with _MATCHER_LOCK:
+        _MATCHERS.clear()
+        _LEGACY_MATCHERS.clear()
+
+
+def _register_matcher(matcher: CommandMatcher) -> None:
+    owner = current_plugin_owner()
+    with _MATCHER_LOCK:
+        if owner is None:
+            if matcher not in _LEGACY_MATCHERS:
+                _LEGACY_MATCHERS.append(matcher)
+            return
+        plugin_matchers = _MATCHERS.setdefault(owner.manager_id, {}).setdefault(
+            owner.plugin_id, []
+        )
+        if matcher not in plugin_matchers:
+            plugin_matchers.append(matcher)
+
+
+def _matchers_for_current_manager() -> list[CommandMatcher]:
+    owner = current_plugin_owner()
+    with _MATCHER_LOCK:
+        result: list[CommandMatcher] = []
+        if owner is not None:
+            for plugin_matchers in _MATCHERS.get(owner.manager_id, {}).values():
+                result.extend(plugin_matchers)
+        # Commands created directly by host code predate manager ownership.
+        result.extend(_LEGACY_MATCHERS)
+        return result
+
+
+def _remove_manager_matchers(manager_id: str) -> None:
+    """Remove only command registrations owned by one PluginManager."""
+
+    with _MATCHER_LOCK:
+        _MATCHERS.pop(manager_id, None)
+
+
+def _remove_plugin_matchers(manager_id: str, plugin_id: str) -> None:
+    """Remove registrations created by one failed or unloaded plugin."""
+
+    with _MATCHER_LOCK:
+        manager_matchers = _MATCHERS.get(manager_id)
+        if manager_matchers is None:
+            return
+        manager_matchers.pop(plugin_id, None)
+        if not manager_matchers:
+            _MATCHERS.pop(manager_id, None)
 
 
 __all__ = [

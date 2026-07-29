@@ -1,5 +1,23 @@
 import sys
 from ..utils.hypetyping import Any
+from .contracts import (
+    AdapterActions,
+    Capabilities,
+    Capability,
+    ConversationKey,
+    ConversationKind,
+    DEFAULT_MEDIA_POLICY,
+    ExternalId,
+    MediaKind,
+    MediaPolicy,
+    MediaRequest,
+    MediaResolution,
+    MediaSourceKind,
+    ProtocolName,
+    ReferenceResolution,
+    ResolutionErrorCode,
+    ResolutionStatus,
+)
 
 
 def replace(new: Any, old: str):

@@ -3,6 +3,11 @@ from .utils.typextensions import Integer
 from .segments import message_types, At
 from .network import KritorConnection, WebsocketConnection, HTTPConnection
 from .hyperogger import levels
+from .adapters.contracts import (
+    normalize_external_id,
+    normalize_optional_external_id,
+    normalize_protocol_name,
+)
 
 from abc import ABC
 from typing import Union
@@ -51,7 +56,7 @@ em = EventManager()
 
 class GroupSender:
     def __init__(self, json_data: dict):
-        self.user_id = json_data.get("user_id")
+        self.user_id = normalize_optional_external_id(json_data.get("user_id"), "sender.user_id")
         self.nickname = json_data.get("nickname")
         self.sex = json_data.get("sex")
         self.age = json_data.get("age")
@@ -64,7 +69,7 @@ class GroupSender:
 
 class PrivateSender:
     def __init__(self, json_data: dict):
-        self.user_id = json_data.get("user_id")
+        self.user_id = normalize_optional_external_id(json_data.get("user_id"), "sender.user_id")
         self.nickname = json_data.get("nickname")
         self.sex = json_data.get("sex")
         self.age = json_data.get("age")
@@ -75,7 +80,7 @@ class GroupAnonymous:
         if json_data is None:
             pass
         else:
-            self.id = json_data.get("id")
+            self.id = normalize_external_id(json_data.get("id"), "anonymous.id")
             self.name = json_data.get("name")
             self.flag = json_data.get("flag")
 
@@ -99,14 +104,30 @@ class Event(ABC):
     def __init__(self, data: dict):
         self.data = data.copy()
         self.time = data.get("time")
-        self.self_id = data.get("self_id")
+        configured_protocol = getattr(config, "protocol", "")
+        self.protocol = normalize_protocol_name(data.get("protocol") or configured_protocol)
+        self.self_id = normalize_external_id(data.get("self_id"), "self_id")
         self.post_type = data.get("post_type")
-        self.user_id = data.get("user_id")
-        self.group_id = data.get("group_id")
+        self.user_id = normalize_optional_external_id(data.get("user_id"), "user_id")
+        raw_group_id = data.get("group_id")
+        if data.get("post_type") == "message" and data.get("message_type") == "private":
+            raw_group_id = None
+        self.group_id = normalize_optional_external_id(raw_group_id, "group_id")
+        conversation_id = data.get("conversation_id")
+        if conversation_id is None:
+            conversation_id = self.group_id if self.group_id is not None else self.user_id
+        self.conversation_id = normalize_optional_external_id(conversation_id, "conversation_id")
 
-        self.is_owner = Integer.convert_from(self.user_id) in config.owner
-        self.blocked = True if self.user_id in config.black_list or self.group_id in config.black_list else False
-        self.is_silent = self.user_id in config.silents or self.group_id in config.silents or 0 in config.silents
+        owner_ids = {str(value) for value in config.owner}
+        blocked_ids = {str(value) for value in config.black_list}
+        silent_ids = {str(value) for value in config.silents}
+        self.is_owner = self.user_id in owner_ids
+        self.blocked = self.user_id in blocked_ids or self.group_id in blocked_ids
+        self.is_silent = (
+            self.user_id in silent_ids
+            or self.group_id in silent_ids
+            or "0" in silent_ids
+        )
 
     def print_log(self, **kwargs) -> None:
         ...
@@ -120,7 +141,7 @@ class MessageEvent(Event):
     def __init__(self, data: dict):
         super().__init__(data)
         self.sub_type = data.get("sub_type")
-        self.message_id = str(data.get("message_id"))
+        self.message_id = normalize_external_id(data.get("message_id"), "message_id")
         self.message = gen_message(data=data)
         self.msg_str = str(self.message)
 
@@ -187,7 +208,7 @@ class GroupMemberDecreaseEvent(NoticeEvent):
     def __init__(self, data: dict):
         super().__init__(data)
         self.sub_type = data.get("sub_type")
-        self.operator_id = data.get("operator_id")
+        self.operator_id = normalize_optional_external_id(data.get("operator_id"), "operator_id")
 
         self.print_log()
 
@@ -200,7 +221,7 @@ class GroupMemberIncreaseEvent(NoticeEvent):
     def __init__(self, data: dict):
         super().__init__(data)
         self.sub_type = data.get("sub_type")
-        self.operator_id = data.get("operator_id")
+        self.operator_id = normalize_optional_external_id(data.get("operator_id"), "operator_id")
 
         self.print_log()
 
@@ -213,7 +234,7 @@ class GroupMuteEvent(NoticeEvent):
     def __init__(self, data: dict):
         super().__init__(data)
         self.sub_type = data.get("sub_type")
-        self.operator_id = data.get("operator_id")
+        self.operator_id = normalize_optional_external_id(data.get("operator_id"), "operator_id")
         self.duration = data.get("duration")
 
         self.print_log()
@@ -238,8 +259,8 @@ class FriendAddEvent(NoticeEvent):
 class GroupRecallEvent(NoticeEvent):
     def __init__(self, data: dict):
         super().__init__(data)
-        self.operator_id = data.get("operator_id")
-        self.message_id = data.get("message_id")
+        self.operator_id = normalize_optional_external_id(data.get("operator_id"), "operator_id")
+        self.message_id = normalize_external_id(data.get("message_id"), "message_id")
 
         self.print_log()
 
@@ -251,7 +272,7 @@ class GroupRecallEvent(NoticeEvent):
 class FriendRecallEvent(NoticeEvent):
     def __init__(self, data: dict):
         super().__init__(data)
-        self.message_id = data.get("message_id")
+        self.message_id = normalize_external_id(data.get("message_id"), "message_id")
 
         self.print_log()
 
@@ -264,7 +285,7 @@ class NotifyEvent(NoticeEvent):
     def __init__(self, data: dict):
         super().__init__(data)
         self.sub_type = data.get("sub_type")
-        self.target_id = data.get("target_id")
+        self.target_id = normalize_optional_external_id(data.get("target_id"), "target_id")
         self.honor_type = data.get("honor_type")
 
 
@@ -273,9 +294,9 @@ class GroupEssenceEvent(NoticeEvent):
     def __init__(self, data: dict):
         super().__init__(data)
         self.sub_type = data.get("sub_type")
-        self.sender_id = data.get("sender_id")
-        self.operator_id = data.get("operator_id")
-        self.message_id = data.get("message_id")
+        self.sender_id = normalize_external_id(data.get("sender_id"), "sender_id")
+        self.operator_id = normalize_optional_external_id(data.get("operator_id"), "operator_id")
+        self.message_id = normalize_external_id(data.get("message_id"), "message_id")
 
         self.print_log()
 
@@ -289,8 +310,8 @@ class GroupEssenceEvent(NoticeEvent):
 class MessageReactionEvent(NoticeEvent):
     def __init__(self, data: dict):
         super().__init__(data)
-        self.message_id = data.get("message_id")
-        self.operator_id = data.get("operator_id")
+        self.message_id = normalize_external_id(data.get("message_id"), "message_id")
+        self.operator_id = normalize_optional_external_id(data.get("operator_id"), "operator_id")
         self.sub_type = data.get("sub_type")
         self.code = data.get("code")
         self.count = data.get("count")
@@ -300,7 +321,7 @@ class MessageReactionEvent(NoticeEvent):
 class BotMenuEvent(NoticeEvent):
     def __init__(self, data: dict):
         super().__init__(data)
-        self.operator_id = data.get("operator_id")
+        self.operator_id = normalize_optional_external_id(data.get("operator_id"), "operator_id")
         self.operator_name = data.get("operator_name")
         self.event_key = data.get("event_key")
         self.feishu_event = data.get("feishu_event")
@@ -327,7 +348,7 @@ class RequestEvent(Event):
     def __init__(self, data: dict):
         super().__init__(data)
         self.comment = data.get("comment")
-        self.flag = data.get("flag")
+        self.flag = data.get("flag")  # Opaque adapter token, not an external identity.
 
 
 @em.reg("request", "friend")

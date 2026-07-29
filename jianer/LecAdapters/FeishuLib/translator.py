@@ -129,6 +129,7 @@ def build_message_event(payload: dict, bot_identity: str) -> dict | None:
         })
 
     return {
+        "protocol": "feishu",
         "post_type": "message",
         "message_type": "group" if is_group else "private",
         "sub_type": "normal",
@@ -136,6 +137,7 @@ def build_message_event(payload: dict, bot_identity: str) -> dict | None:
         "self_id": str(bot_identity),
         "user_id": str(open_id),
         "group_id": str(message.get("chat_id")) if is_group else None,
+        "conversation_id": str(message.get("chat_id") or open_id),
         "message_id": str(message.get("message_id") or ""),
         "message": message_segments,
         "sender": sender_data,
@@ -150,6 +152,7 @@ def build_menu_event(payload: dict, bot_identity: str) -> dict | None:
     open_id = operator_id.get("open_id") or operator_id.get("user_id") or operator.get("open_id") or ""
     event_key = event.get("event_key") or event.get("key") or event.get("menu_key") or "菜单"
     return {
+        "protocol": "feishu",
         "post_type": "message",
         "message_type": "private",
         "sub_type": "menu",
@@ -157,6 +160,7 @@ def build_menu_event(payload: dict, bot_identity: str) -> dict | None:
         "self_id": str(bot_identity),
         "user_id": str(open_id),
         "group_id": None,
+        "conversation_id": str(open_id),
         "message_id": str(header.get("event_id") or f"menu_{time.time_ns()}"),
         "message": [{"type": "text", "data": {"text": str(event_key)}}],
         "sender": {

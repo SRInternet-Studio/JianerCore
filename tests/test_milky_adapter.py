@@ -138,7 +138,7 @@ def test_milky_send_plain_text_returns_response(monkeypatch):
     response = asyncio.run(actions.send("hello", group_id=10001))
 
     assert response.ret_code == 0
-    assert response.data.message_id == msg_enid(1, 1, 10001)
+    assert response.data.message_id == str(msg_enid(1, 1, 10001))
     assert calls == [
         (
             "send_group_message",
@@ -178,7 +178,7 @@ def test_milky_send_retries_without_reply_when_reply_payload_rejected(monkeypatc
     response = asyncio.run(actions.send(message, group_id=10001))
 
     assert response.ret_code == 0
-    assert response.data.message_id == msg_enid(1, 2, 10001)
+    assert response.data.message_id == str(msg_enid(1, 2, 10001))
     assert calls[0][1]["message"][0] == {"type": "reply", "data": {"message_seq": 123}}
     assert calls[1][1]["message"] == [{"type": "text", "data": {"text": "hello"}}]
 
@@ -220,7 +220,7 @@ def test_milky_get_stranger_info_uses_standard_profile_endpoint(monkeypatch):
     response = asyncio.run(Actions(connection).get_stranger_info(10001))
 
     assert response.ret_code == 0
-    assert response.data.user_id == 10001
+    assert response.data.user_id == "10001"
     assert response.data.nickname == "Tom"
     assert calls == [("get_user_profile", {"user_id": 10001})]
 

@@ -23,9 +23,23 @@ class Packet:
         self.paras = kwargs
         self.echo = f"{endpoint}_{random.randint(1000, 9999)}"
 
-    def send_to(self, connection: MilkyHttpConnection) -> dict:
+    def send_to(
+            self,
+            connection: MilkyHttpConnection,
+            *,
+            timeout_seconds: float = 15.0,
+            attempts: int = 3,
+    ) -> dict:
         if isinstance(connection, MilkyHttpConnection):
-            res = connection.http_send(self.endpoint, self.paras)
+            if timeout_seconds == 15.0 and attempts == 3:
+                res = connection.http_send(self.endpoint, self.paras)
+            else:
+                res = connection.http_send(
+                    self.endpoint,
+                    self.paras,
+                    timeout_seconds=timeout_seconds,
+                    attempts=attempts,
+                )
             if isinstance(res, dict):
                 res["echo"] = self.echo
                 reports.put(self.echo, res)

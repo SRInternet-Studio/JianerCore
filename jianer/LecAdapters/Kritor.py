@@ -13,6 +13,16 @@ from ..network import KritorConnection
 from ..utils import errors
 from ..utils.apiresponse import *
 from .. import configurator, hyperogger
+from ..adapters.contracts import (
+    Capability,
+    ConversationKey,
+    DEFAULT_MEDIA_POLICY,
+    ExternalId,
+    MediaPolicy,
+    MediaRequest,
+)
+from ..adapters.media import unsupported_media
+from ..adapters.resolution import numeric_external_id, unsupported_reference
 
 from ..LecAdapters.KritorLib.protos.common import Contact, Scene
 from ..LecAdapters.KritorLib.protos.core import GetVersionRequest, CoreServiceStub
@@ -25,7 +35,7 @@ from ..LecAdapters.KritorLib.protos.message import (
 
 config = configurator.BotConfig.get("jianer-bot")
 logger = hyperogger.Logger()
-logger.set_level(config.log_level)
+logger.set_level(config.log_level if config else "INFO")
 
 
 def mid_res(msg_id: str) -> tuple[str, int, int]:
@@ -38,11 +48,33 @@ def mid_res(msg_id: str) -> tuple[str, int, int]:
 
 
 class Actions(OneBotActions):
+    protocol = "kritor"
+    capabilities = frozenset({Capability.SEND_REPLY})
+
     def __init__(self, cnt: KritorConnection):
         self.connection = cnt
 
+    async def resolve_reference(
+            self,
+            message_id: ExternalId,
+            *,
+            conversation: ConversationKey,
+            timeout_seconds: float = 10.0,
+    ):
+        return unsupported_reference(message_id, conversation)
+
+    async def resolve_media(
+            self,
+            request: MediaRequest,
+            *,
+            conversation: ConversationKey,
+            policy: MediaPolicy = DEFAULT_MEDIA_POLICY,
+    ):
+        return unsupported_media(request)
+
     async def send(
-            self, message: common.Message, group_id: int = None, user_id: int = None
+            self, message: common.Message, group_id: ExternalId = None,
+            user_id: ExternalId = None
     ) -> common.Ret[MsgSendRsp]:
         msg = to_protos(message.get_sync())
         if group_id is not None:
@@ -74,11 +106,23 @@ class Actions(OneBotActions):
             GetVerInfoRsp
         )
 
-    async def get_msg(self, msg_id: int) -> common.Ret[GetMsgRsp]:
+    @staticmethod
+    def _mapped_message_id(msg_id: ExternalId) -> str:
         try:
-            mid = list(filter(lambda x: message_ids[x] == msg_id, message_ids))[1]
-        except IndexError:
-            mid = list(filter(lambda x: message_ids[x] == msg_id, message_ids))[0]
+            internal_id = numeric_external_id(msg_id, "message_id")
+        except ValueError as exc:
+            raise errors.ArgsInvalidError(str(exc)) from exc
+        matches = [
+            raw_id
+            for raw_id, mapped_id in message_ids.items()
+            if mapped_id == internal_id
+        ]
+        if not matches:
+            raise errors.ArgsInvalidError(f"Unknown Kritor message_id: {msg_id}")
+        return matches[1] if len(matches) > 1 else matches[0]
+
+    async def get_msg(self, msg_id: ExternalId) -> common.Ret[GetMsgRsp]:
+        mid = self._mapped_message_id(msg_id)
         if str(mid).startswith("g"):  # GROUP
             contact = Contact(
                 scene=Scene.GROUP,
@@ -138,7 +182,13 @@ def _handler(data: Union[dict, HyperNotify], actions: Actions) -> None:
         if data.get("post_type") == "meta_event" or data.get("user_id") == data.get("self_id"):
             pass
         else:
-            asyncio.run(handler(em.new(data), actions))
+            event_data = data.copy()
+            event_data["protocol"] = "kritor"
+            event_data.setdefault(
+                "conversation_id",
+                event_data.get("group_id") if event_data.get("group_id") is not None else event_data.get("user_id"),
+            )
+            asyncio.run(handler(em.new(event_data), actions))
     else:
         asyncio.run(handler(data, actions))
 

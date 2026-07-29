@@ -8,7 +8,7 @@ from .loader import (
     LoadResult,
     load_plugins,
 )
-from .manager import BUILTIN_PLUGINS, PluginManager
+from .manager import BUILTIN_PLUGINS, PluginManager, PluginSetupError
 from .metadata import (
     PLUGIN_NAME_PATTERN,
     PLUGIN_NAME_PREFIX,
@@ -16,6 +16,12 @@ from .metadata import (
     Plugin,
     PluginMetadata,
     is_valid_plugin_name,
+)
+from .runtime import (
+    PluginManagerState,
+    ShutdownReport,
+    SubscriptionOwner,
+    SubscriptionToken,
 )
 
 __all__ = [
@@ -30,7 +36,12 @@ __all__ = [
     "LoadResult",
     "Plugin",
     "PluginManager",
+    "PluginManagerState",
     "PluginMetadata",
+    "PluginSetupError",
+    "ShutdownReport",
+    "SubscriptionOwner",
+    "SubscriptionToken",
     "is_valid_plugin_name",
     "load_plugins",
 ]

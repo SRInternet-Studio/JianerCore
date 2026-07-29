@@ -572,6 +572,12 @@ async def on_message(event, actions):
 - 不需要声明 `requires={"jianerbot-plugin-alconna"}`
 - 不能使用 `@Command`、`UniMessage.send()`（它们依赖 alconna）
 
+需要无条件观察消息或只参与最终 fallback 时，还可以分别暴露
+`on_message_observe(event, actions)` 和
+`on_message_fallback(event, actions)`。宿主的三段派发、生命周期 hook、
+运行时两阶段重载和跨适配器能力接口见
+[0.92 插件生命周期与适配器契约](lifecycle-and-adapter-contracts.md)。
+
 ---
 
 ## 在 bot 中加载插件
@@ -603,19 +609,35 @@ with Client() as client:
 
 ```python
 from jianer import Client
-from jianer.events import GroupMessageEvent, PrivateMessageEvent
 from jianer.plugins import PluginManager
 
 manager = PluginManager()
 result = manager.load_plugins("plugins")
 
 with Client() as client:
-    # 把 PluginManager 的 dispatch 订阅到消息事件
-    client.subscribe(manager.dispatch, GroupMessageEvent)
-    client.subscribe(manager.dispatch, PrivateMessageEvent)
-    manager.setup_client(client)                # 调用各插件的 setup()
+    manager.setup_client(client)
+    client.plugin_manager = manager
+
+    # 宿主自己的消息入口按 observe -> normal -> host -> fallback 接线。
+    async def handle_message(event, actions):
+        await manager.observe(event, actions)
+        handled = await manager.dispatch(
+            event,
+            actions,
+            run_observers=False,
+        )
+        if not handled:
+            handled = await handle_host_commands(event, actions)
+        if not handled:
+            await manager.dispatch_fallback(event, actions)
+
     client.run()
 ```
+
+如果宿主没有自己的中间命令层，优先使用 `client.load_plugins("plugins")`，
+它会注册稳定的 Manager dispatcher。运行时重载不要重新订阅
+`manager.dispatch`；请使用 staged Manager 和
+`client.swap_plugin_manager()`，完整示例见上述 0.92 契约文档。
 
 ---
 

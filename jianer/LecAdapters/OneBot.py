@@ -12,14 +12,47 @@ from ..utils.apiresponse import *
 from ..LecAdapters.OneBotLib.Manager import reports, Packet
 from ..events import *
 from ..utils.hypetyping import Any, Union, NoReturn
+from ..adapters.contracts import (
+    Capability,
+    ConversationKey,
+    DEFAULT_MEDIA_POLICY,
+    ExternalId,
+    MediaPolicy,
+    MediaRequest,
+    MediaResolution,
+    ReferenceResolution,
+    ResolutionErrorCode,
+    ResolutionStatus,
+)
+from ..adapters.media import media_failure, resolve_media_request
+from ..adapters.resolution import (
+    numeric_external_id,
+    onebot_reference_identity,
+    positive_timeout_seconds,
+    reference_failure,
+    reference_success,
+    response_data_raw,
+    response_segments,
+)
 
 config = configurator.BotConfig.get("jianer-bot")
 logger = hyperogger.Logger()
-logger.set_level(config.log_level)
+logger.set_level(config.log_level if config else "INFO")
 listener_ran = False
 
 
 class Actions:
+    protocol = "onebot"
+    capabilities = frozenset({
+        Capability.RESOLVE_REFERENCE,
+        Capability.RESOLVE_MEDIA,
+        Capability.SEND_REPLY,
+        Capability.SEND_IMAGE,
+        Capability.SEND_AUDIO,
+        Capability.NATIVE_GROUP_FORWARD,
+        Capability.RESOLVE_FORWARD,
+    })
+
     def __init__(self, cnt: Union[network.WebsocketConnection, network.HTTPConnection]):
         self.connection = cnt
 
@@ -40,21 +73,29 @@ class Actions:
 
         self.custom = CustomAction(self.connection)
 
+    @staticmethod
+    def _numeric_id(value, field_name: str) -> int:
+        try:
+            return numeric_external_id(value, field_name)
+        except ValueError as exc:
+            raise errors.ArgsInvalidError(str(exc)) from exc
+
     async def send(
-            self, message: Union[common.Message, str], group_id: int = None, user_id: int = None
+            self, message: Union[common.Message, str], group_id: ExternalId = None,
+            user_id: ExternalId = None
     ) -> common.Ret[MsgSendRsp]:
         if isinstance(message, str):
             message = common.Message(segments.Text(message))
         if group_id is not None:
             packet = Packet(
                 "send_msg",
-                group_id=group_id,
+                group_id=self._numeric_id(group_id, "group_id"),
                 message=await message.get()
             )
         elif user_id is not None:
             packet = Packet(
                 "send_msg",
-                user_id=user_id,
+                user_id=self._numeric_id(user_id, "user_id"),
                 message=await message.get()
             )
         else:
@@ -63,26 +104,26 @@ class Actions:
         logger.info(f"向{(('群 ' + str(group_id)) if group_id else ('用户' + str(user_id))) + ' '}发送：{str(message)}")
         return common.Ret.fetch(packet.echo, MsgSendRsp)
 
-    async def del_message(self, message_id: int) -> None:
+    async def del_message(self, message_id: ExternalId) -> None:
         Packet(
             "delete_msg",
-            message_id=message_id,
+            message_id=self._numeric_id(message_id, "message_id"),
         ).send_to(self.connection)
         logger.info(f"撤回 {message_id}")
 
-    async def set_group_kick(self, group_id: int, user_id: int) -> None:
+    async def set_group_kick(self, group_id: ExternalId, user_id: ExternalId) -> None:
         Packet(
             "set_group_kick",
-            group_id=group_id,
-            user_id=user_id,
+            group_id=self._numeric_id(group_id, "group_id"),
+            user_id=self._numeric_id(user_id, "user_id"),
         ).send_to(self.connection)
         logger.info(f"将用户 {user_id} 移出群 {group_id}")
 
-    async def set_group_ban(self, group_id: int, user_id: int, duration: int = 60) -> None:
+    async def set_group_ban(self, group_id: ExternalId, user_id: ExternalId, duration: int = 60) -> None:
         Packet(
             "set_group_ban",
-            group_id=group_id,
-            user_id=user_id,
+            group_id=self._numeric_id(group_id, "group_id"),
+            user_id=self._numeric_id(user_id, "user_id"),
             duration=duration,
         ).send_to(self.connection)
         logger.info(f"在群 {group_id} 将用户 {user_id} 禁言 {duration}s")
@@ -125,14 +166,14 @@ class Actions:
                 return data.data
         raise ValueError("Incorrect message type")
 
-    async def send_group_forward_msg(self, group_id: int, message: common.Message) -> common.Ret[SendGrpForwardRsp]:
+    async def send_group_forward_msg(self, group_id: ExternalId, message: common.Message) -> common.Ret[SendGrpForwardRsp]:
         packet = Packet(
             "send_group_forward_msg",
-            group_id=group_id,
+            group_id=self._numeric_id(group_id, "group_id"),
             messages=await message.get()
         )
         packet.send_to(self.connection)
-        return common.Ret.fetch(packet.echo, SendForwardRsp)
+        return common.Ret.fetch(packet.echo, SendGrpForwardRsp)
 
     async def set_group_add_request(self, flag: str, sub_type: str, approve: bool,
                                     reason: str = "Not Mentioned") -> None:
@@ -145,29 +186,29 @@ class Actions:
         ).send_to(self.connection)
         logger.info(f"由于 {reason}，{'通过' if approve else '拒绝'} {flag} 请求")
 
-    async def get_stranger_info(self, user_id: int) -> common.Ret[GetStrInfoRsp]:
+    async def get_stranger_info(self, user_id: ExternalId) -> common.Ret[GetStrInfoRsp]:
         packet = Packet(
             "get_stranger_info",
-            user_id=user_id,
+            user_id=self._numeric_id(user_id, "user_id"),
             no_cache=True,
         )
         packet.send_to(self.connection)
         return common.Ret.fetch(packet.echo, GetStrInfoRsp)
 
-    async def get_group_member_info(self, group_id: int, user_id: int) -> common.Ret[GetGrpMemInfoRsp]:
+    async def get_group_member_info(self, group_id: ExternalId, user_id: ExternalId) -> common.Ret[GetGrpMemInfoRsp]:
         packet = Packet(
             "get_group_member_info",
-            group_id=group_id,
-            user_id=user_id,
+            group_id=self._numeric_id(group_id, "group_id"),
+            user_id=self._numeric_id(user_id, "user_id"),
             no_cache=True
         )
         packet.send_to(self.connection)
         return common.Ret.fetch(packet.echo, GetGrpMemInfoRsp)
 
-    async def get_group_info(self, group_id: int) -> common.Ret[GetGrpInfoRsp]:
+    async def get_group_info(self, group_id: ExternalId) -> common.Ret[GetGrpInfoRsp]:
         packet = Packet(
             "get_group_info",
-            group_id=group_id,
+            group_id=self._numeric_id(group_id, "group_id"),
             no_cache=True
         )
         packet.send_to(self.connection)
@@ -178,35 +219,127 @@ class Actions:
         packet.send_to(self.connection)
         return common.Ret.fetch(packet.echo)
 
-    async def set_essence_msg(self, message_id: int) -> None:
+    async def set_essence_msg(self, message_id: ExternalId) -> None:
         Packet(
             "set_essence_msg",
-            message_id=message_id
+            message_id=self._numeric_id(message_id, "message_id")
         ).send_to(self.connection)
 
-    async def set_group_special_title(self, group_id: int, user_id: int, title: str) -> None:
+    async def set_group_special_title(self, group_id: ExternalId, user_id: ExternalId, title: str) -> None:
         Packet(
             "set_group_special_title",
-            group_id=group_id,
-            user_id=user_id,
+            group_id=self._numeric_id(group_id, "group_id"),
+            user_id=self._numeric_id(user_id, "user_id"),
             special_title=title,
         ).send_to(self.connection)
 
-    async def get_msg(self, msg_id: int) -> common.Ret[GetMsgRsp]:
+    async def get_msg(self, msg_id: ExternalId) -> common.Ret[GetMsgRsp]:
         packet = Packet(
             "get_msg",
-            message_id=msg_id
+            message_id=self._numeric_id(msg_id, "message_id")
         )
         packet.send_to(self.connection)
-        return common.Ret.fetch(packet.echo, GetMsgRsp)
+        while packet.echo not in reports.contents:
+            await asyncio.sleep(0.01)
+        return common.Ret(reports.contents[packet.echo], GetMsgRsp)
 
-    async def send_callback(self, group_id: int, bot_id: int, data: dict) -> None:
+    async def send_callback(self, group_id: ExternalId, bot_id: ExternalId, data: dict) -> None:
         Packet(
             "send_group_bot_callback",
-            group_id=group_id,
-            bot_id=bot_id,
+            group_id=self._numeric_id(group_id, "group_id"),
+            bot_id=self._numeric_id(bot_id, "bot_id"),
             **data
         ).send_to(self.connection)
+
+    async def resolve_reference(
+            self,
+            message_id: ExternalId,
+            *,
+            conversation: ConversationKey,
+            timeout_seconds: float = 10.0,
+    ) -> ReferenceResolution:
+        if conversation.protocol != self.protocol:
+            return reference_failure(
+                ResolutionStatus.REJECTED,
+                ResolutionErrorCode.CONVERSATION_MISMATCH,
+                message_id=message_id,
+                conversation=conversation,
+            )
+        try:
+            timeout_seconds = positive_timeout_seconds(timeout_seconds)
+            normalized_id = str(self._numeric_id(message_id, "message_id"))
+            response = await asyncio.wait_for(
+                self.get_msg(normalized_id),
+                timeout=timeout_seconds,
+            )
+        except ValueError:
+            return reference_failure(
+                ResolutionStatus.REJECTED,
+                ResolutionErrorCode.INVALID_TIMEOUT,
+                message_id=message_id,
+                conversation=conversation,
+            )
+        except errors.ArgsInvalidError:
+            return reference_failure(
+                ResolutionStatus.REJECTED,
+                ResolutionErrorCode.INVALID_ID,
+                message_id=message_id,
+                conversation=conversation,
+            )
+        except asyncio.TimeoutError:
+            return reference_failure(
+                ResolutionStatus.ERROR,
+                ResolutionErrorCode.TIMEOUT,
+                message_id=message_id,
+                conversation=conversation,
+            )
+        except Exception:
+            return reference_failure(
+                ResolutionStatus.ERROR,
+                ResolutionErrorCode.UPSTREAM_ERROR,
+                message_id=message_id,
+                conversation=conversation,
+            )
+        if getattr(response, "status", None) != "ok" or getattr(response, "ret_code", None) not in (0, None):
+            return reference_failure(
+                ResolutionStatus.ERROR,
+                ResolutionErrorCode.UPSTREAM_ERROR,
+                message_id=message_id,
+                conversation=conversation,
+            )
+        raw = response_data_raw(response)
+        resolved_kind, resolved_conversation_id, sender_id = onebot_reference_identity(raw, conversation)
+        if resolved_kind is None or resolved_conversation_id is None:
+            return reference_failure(
+                ResolutionStatus.ERROR,
+                ResolutionErrorCode.MALFORMED_RESPONSE,
+                message_id=message_id,
+                conversation=conversation,
+            )
+        return reference_success(
+            expected=conversation,
+            message_id=message_id,
+            resolved_kind=resolved_kind,
+            resolved_conversation_id=resolved_conversation_id,
+            sender_id=sender_id,
+            sent_at=raw.get("time"),
+            segments=response_segments(response),
+        )
+
+    async def resolve_media(
+            self,
+            request: MediaRequest,
+            *,
+            conversation: ConversationKey,
+            policy: MediaPolicy = DEFAULT_MEDIA_POLICY,
+    ) -> MediaResolution:
+        if conversation.protocol != self.protocol:
+            return media_failure(
+                request,
+                ResolutionStatus.REJECTED,
+                ResolutionErrorCode.CONVERSATION_MISMATCH,
+            )
+        return await resolve_media_request(request, policy)
 
 
 async def tester(
@@ -222,7 +355,13 @@ def __handler(data: Union[dict, HyperNotify], actions: Actions) -> None:
         elif data.get("post_type") == "meta_event" or data.get("user_id") == data.get("self_id"):
             pass
         else:
-            asyncio.run(handler(events.em.new(data), actions))
+            event_data = data.copy()
+            event_data["protocol"] = "onebot"
+            event_data.setdefault(
+                "conversation_id",
+                event_data.get("group_id") if event_data.get("group_id") is not None else event_data.get("user_id"),
+            )
+            asyncio.run(handler(events.em.new(event_data), actions))
     else:
         asyncio.run(handler(data, actions))
 

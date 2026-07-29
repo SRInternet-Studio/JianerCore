@@ -60,12 +60,12 @@ def test_milky_getters_normalize_official_wrapped_entities(monkeypatch):
     group = asyncio.run(actions.get_group_info(10001))
     member = asyncio.run(actions.get_group_member_info(10001, 12345))
 
-    assert login.data.user_id == 12345
+    assert login.data.user_id == "12345"
     assert login.data.nickname == "bot"
-    assert group.data.group_id == 10001
+    assert group.data.group_id == "10001"
     assert group.data.group_name == "test group"
-    assert member.data.group_id == 10001
-    assert member.data.user_id == 12345
+    assert member.data.group_id == "10001"
+    assert member.data.user_id == "12345"
     assert member.data.level == "1"
     assert [endpoint for endpoint, _ in calls] == [
         "get_login_info",
@@ -126,8 +126,8 @@ def test_milky_get_msg_uses_official_identity_and_unwraps_message(monkeypatch):
         "peer_id": 10001,
         "message_seq": 42,
     })]
-    assert response.data.message_id == encoded_id
-    assert response.data.real_id == 42
+    assert response.data.message_id == str(encoded_id)
+    assert response.data.real_id == "42"
     assert response.data.message_type == "group"
     assert str(response.data.message) == "hello"
 
@@ -204,7 +204,7 @@ def test_milky_group_forward_uses_forward_outgoing_segment(monkeypatch):
 
     response = asyncio.run(actions.send_group_forward_msg(10001, message))
 
-    assert response.data.message_id == msg_enid(1, 7, 10001)
+    assert response.data.message_id == str(msg_enid(1, 7, 10001))
     assert calls == [("send_group_message", {
         "group_id": 10001,
         "message": [{

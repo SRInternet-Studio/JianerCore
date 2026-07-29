@@ -8,6 +8,27 @@ from ..utils.typextensions import ObjectedJson
 from .MilkyLib.translator import MilkyHttpConnection, MilkyOutGoingSegBuilder, msg_deid, msg_enid, message_translator
 from .MilkyLib.Manager import Packet, reports
 from .MilkyLib.types import MilkyOutgoingSegment, consume_segment, consume_segments, make_text_segment
+from ..adapters.contracts import (
+    Capability,
+    ConversationKey,
+    ConversationKind,
+    DEFAULT_MEDIA_POLICY,
+    ExternalId,
+    MediaPolicy,
+    MediaRequest,
+    MediaResolution,
+    ReferenceResolution,
+    ResolutionErrorCode,
+    ResolutionStatus,
+)
+from ..adapters.media import media_failure, resolve_media_request
+from ..adapters.resolution import (
+    numeric_external_id,
+    positive_timeout_seconds,
+    reference_failure,
+    reference_success,
+    response_segments,
+)
 
 import time
 import threading
@@ -28,6 +49,17 @@ def _fetch_ret(echo: str, serializer=ObjectedJson) -> common.Ret:
 
 
 class Actions:
+    protocol = "milky"
+    capabilities = frozenset({
+        Capability.RESOLVE_REFERENCE,
+        Capability.RESOLVE_MEDIA,
+        Capability.SEND_REPLY,
+        Capability.SEND_IMAGE,
+        Capability.SEND_AUDIO,
+        Capability.NATIVE_GROUP_FORWARD,
+        Capability.RESOLVE_FORWARD,
+    })
+
     def __init__(self, cnt: MilkyHttpConnection):
         self.connection = cnt
 
@@ -47,6 +79,13 @@ class Actions:
                 return wrapper
 
         self.custom = CustomAction(self.connection)
+
+    @staticmethod
+    def _numeric_id(value, field_name: str) -> int:
+        try:
+            return numeric_external_id(value, field_name)
+        except ValueError as exc:
+            raise errors.ArgsInvalidError(str(exc)) from exc
 
     @staticmethod
     def _is_successful_response(res: Any) -> bool:
@@ -200,7 +239,8 @@ class Actions:
         raise ValueError(f"Unsupported Milky forward-node segment type: {segment_type}")
 
     async def send(
-            self, message: Union[common.Message, str], group_id: int = None, user_id: int = None
+            self, message: Union[common.Message, str], group_id: ExternalId = None,
+            user_id: ExternalId = None
     ) -> common.Ret[MsgSendRsp]:
         if isinstance(message, str):
             message = common.Message(segments.Text(message))
@@ -215,12 +255,12 @@ class Actions:
 
         if group_id is not None:
             scene = 1
-            peer_id = int(group_id)
+            peer_id = self._numeric_id(group_id, "group_id")
             endpoint = "send_group_message"
             payload = {"group_id": peer_id, "message": outgoing}
         elif user_id is not None:
             scene = 0
-            peer_id = int(user_id)
+            peer_id = self._numeric_id(user_id, "user_id")
             endpoint = "send_private_message"
             payload = {"user_id": peer_id, "message": outgoing}
         else:
@@ -289,8 +329,8 @@ class Actions:
         logger.info(f"向{target}发送：{str(message)}")
         return _fetch_ret(packet.echo, MsgSendRsp)
 
-    async def del_message(self, message_id: int) -> None:
-        enid = int(message_id)
+    async def del_message(self, message_id: ExternalId) -> None:
+        enid = self._numeric_id(message_id, "message_id")
         if enid < (1 << 64):
             raise errors.ArgsInvalidError(
                 "Milky recall requires an encoded message_id containing scene, peer_id, and message_seq."
@@ -313,20 +353,20 @@ class Actions:
             raise errors.ArgsInvalidError(f"Unsupported Milky message scene: {scene}")
         logger.info(f"撤回 {message_id}")
 
-    async def set_group_kick(self, group_id: int, user_id: int) -> None:
+    async def set_group_kick(self, group_id: ExternalId, user_id: ExternalId) -> None:
         self._send_action(
             "kick_group_member",
-            group_id=int(group_id),
-            user_id=int(user_id),
+            group_id=self._numeric_id(group_id, "group_id"),
+            user_id=self._numeric_id(user_id, "user_id"),
             reject_add_request=True,
         )
         logger.info(f"将用户 {user_id} 移出群 {group_id}")
 
-    async def set_group_ban(self, group_id: int, user_id: int, duration: int = 60) -> None:
+    async def set_group_ban(self, group_id: ExternalId, user_id: ExternalId, duration: int = 60) -> None:
         self._send_action(
             "set_group_member_mute",
-            group_id=int(group_id),
-            user_id=int(user_id),
+            group_id=self._numeric_id(group_id, "group_id"),
+            user_id=self._numeric_id(user_id, "user_id"),
             duration=int(duration),
         )
         logger.info(f"在群 {group_id} 将用户 {user_id} 禁言 {duration}s")
@@ -377,7 +417,7 @@ class Actions:
     async def forward_solve(self, message: common.Message) -> common.Message:
         return message
 
-    async def send_group_forward_msg(self, group_id: int, message: common.Message) -> common.Ret[SendGrpForwardRsp]:
+    async def send_group_forward_msg(self, group_id: ExternalId, message: common.Message) -> common.Ret[SendGrpForwardRsp]:
         nodes = []
         for node in message:
             if isinstance(node, segments.CustomNode):
@@ -404,12 +444,18 @@ class Actions:
             raise errors.ArgsInvalidError("Milky forward message must contain at least one node.")
         outgoing = MilkyOutGoingSegBuilder().forward(nodes).build()
         packet, res = self._send_action(
-            "send_group_message", group_id=int(group_id), message=outgoing
+            "send_group_message",
+            group_id=self._numeric_id(group_id, "group_id"),
+            message=outgoing,
         )
         data = res.get("data") if isinstance(res, dict) else None
         if not isinstance(data, dict) or data.get("message_seq") is None:
             raise errors.ActionFailedError(f"Milky forward send returned no message_seq: {res}")
-        data["message_id"] = msg_enid(1, int(data["message_seq"]), int(group_id))
+        data["message_id"] = msg_enid(
+            1,
+            int(data["message_seq"]),
+            self._numeric_id(group_id, "group_id"),
+        )
         data.setdefault("forward_id", "")
         return _fetch_ret(packet.echo, SendGrpForwardRsp)
 
@@ -420,12 +466,13 @@ class Actions:
             "group_id, and is_filtered; the legacy OneBot flag signature cannot represent them."
         )
 
-    async def get_stranger_info(self, user_id: int) -> common.Ret[GetStrInfoRsp]:
-        packet = Packet("get_user_profile", user_id=int(user_id))
+    async def get_stranger_info(self, user_id: ExternalId) -> common.Ret[GetStrInfoRsp]:
+        numeric_user_id = self._numeric_id(user_id, "user_id")
+        packet = Packet("get_user_profile", user_id=numeric_user_id)
         res = packet.send_to(self.connection)
         if isinstance(res, dict) and isinstance(res.get("data"), dict):
             data = res["data"]
-            data["user_id"] = data.get("user_id") or data.get("userId") or data.get("uid") or int(user_id)
+            data["user_id"] = data.get("user_id") or data.get("userId") or data.get("uid") or numeric_user_id
             data["nickname"] = data.get("nickname") or data.get("nick") or data.get("name") or ""
             data["sex"] = data.get("sex") or "unknown"
             try:
@@ -434,19 +481,21 @@ class Actions:
                 data["age"] = 0
         return _fetch_ret(packet.echo, GetStrInfoRsp)
 
-    async def get_group_member_info(self, group_id: int, user_id: int) -> common.Ret[GetGrpMemInfoRsp]:
+    async def get_group_member_info(self, group_id: ExternalId, user_id: ExternalId) -> common.Ret[GetGrpMemInfoRsp]:
+        numeric_group_id = self._numeric_id(group_id, "group_id")
+        numeric_user_id = self._numeric_id(user_id, "user_id")
         packet = Packet(
             "get_group_member_info",
-            group_id=group_id,
-            user_id=user_id
+            group_id=numeric_group_id,
+            user_id=numeric_user_id,
         )
         res = packet.send_to(self.connection)
         if isinstance(res, dict) and isinstance(res.get("data"), dict):
             wrapper = res["data"]
             member = wrapper.get("member") if isinstance(wrapper.get("member"), dict) else wrapper
             normalized = {
-                "group_id": int(member.get("group_id") or group_id),
-                "user_id": int(member.get("user_id") or user_id),
+                "group_id": int(member.get("group_id") or numeric_group_id),
+                "user_id": int(member.get("user_id") or numeric_user_id),
                 "nickname": member.get("nickname") or member.get("name") or "",
                 "card": member.get("card") or "",
                 "sex": member.get("sex") or "unknown",
@@ -465,17 +514,18 @@ class Actions:
             wrapper.update(normalized)
         return _fetch_ret(packet.echo, GetGrpMemInfoRsp)
 
-    async def get_group_info(self, group_id: int) -> common.Ret[GetGrpInfoRsp]:
+    async def get_group_info(self, group_id: ExternalId) -> common.Ret[GetGrpInfoRsp]:
+        numeric_group_id = self._numeric_id(group_id, "group_id")
         packet = Packet(
             "get_group_info",
-            group_id=group_id
+            group_id=numeric_group_id,
         )
         res = packet.send_to(self.connection)
         if isinstance(res, dict) and isinstance(res.get("data"), dict):
             wrapper = res["data"]
             group = wrapper.get("group") if isinstance(wrapper.get("group"), dict) else wrapper
             normalized = {
-                "group_id": int(group.get("group_id") or group_id),
+                "group_id": int(group.get("group_id") or numeric_group_id),
                 "group_name": group.get("group_name") or group.get("name") or "",
                 "member_count": int(group.get("member_count") or 0),
                 "max_member_count": int(group.get("max_member_count") or 0),
@@ -491,8 +541,8 @@ class Actions:
             res["data"] = {"online": True, "good": True}
         return _fetch_ret(packet.echo)
 
-    async def set_essence_msg(self, message_id: int) -> None:
-        enid = int(message_id)
+    async def set_essence_msg(self, message_id: ExternalId) -> None:
+        enid = self._numeric_id(message_id, "message_id")
         if enid < (1 << 64):
             raise errors.ArgsInvalidError(
                 "Milky essence actions require an encoded group message_id."
@@ -507,16 +557,22 @@ class Actions:
             is_set=True,
         )
 
-    async def set_group_special_title(self, group_id: int, user_id: int, title: str) -> None:
+    async def set_group_special_title(self, group_id: ExternalId, user_id: ExternalId, title: str) -> None:
         self._send_action(
             "set_group_member_special_title",
-            group_id=int(group_id),
-            user_id=int(user_id),
+            group_id=self._numeric_id(group_id, "group_id"),
+            user_id=self._numeric_id(user_id, "user_id"),
             special_title=str(title),
         )
 
-    async def get_msg(self, msg_id: int) -> common.Ret[GetMsgRsp]:
-        enid = int(msg_id)
+    def _get_msg_sync(
+            self,
+            msg_id: ExternalId,
+            *,
+            timeout_seconds: float = 15.0,
+            attempts: int = 3,
+    ) -> common.Ret[GetMsgRsp]:
+        enid = self._numeric_id(msg_id, "message_id")
         if enid < (1 << 64):
             raise errors.ArgsInvalidError(
                 "Milky get_msg requires an encoded message_id containing scene, peer_id, and message_seq."
@@ -530,7 +586,11 @@ class Actions:
             peer_id=int(peer_id),
             message_seq=int(seq),
         )
-        res = packet.send_to(self.connection)
+        res = packet.send_to(
+            self.connection,
+            timeout_seconds=timeout_seconds,
+            attempts=attempts,
+        )
         if isinstance(res, dict) and isinstance(res.get("data"), dict):
             data = res["data"]
             if isinstance(data.get("message"), dict):
@@ -593,8 +653,127 @@ class Actions:
             )
         return _fetch_ret(packet.echo, GetMsgRsp)
 
-    async def send_callback(self, group_id: int, bot_id: int, data: dict) -> None:
+    async def get_msg(self, msg_id: ExternalId) -> common.Ret[GetMsgRsp]:
+        return self._get_msg_sync(msg_id)
+
+    async def send_callback(self, group_id: ExternalId, bot_id: ExternalId, data: dict) -> None:
         raise errors.ArgsInvalidError("Milky does not define a send_callback API.")
+
+    async def resolve_reference(
+            self,
+            message_id: ExternalId,
+            *,
+            conversation: ConversationKey,
+            timeout_seconds: float = 10.0,
+    ) -> ReferenceResolution:
+        if conversation.protocol != self.protocol:
+            return reference_failure(
+                ResolutionStatus.REJECTED,
+                ResolutionErrorCode.CONVERSATION_MISMATCH,
+                message_id=message_id,
+                conversation=conversation,
+            )
+        try:
+            encoded_id = numeric_external_id(message_id, "message_id")
+        except ValueError:
+            return reference_failure(
+                ResolutionStatus.REJECTED,
+                ResolutionErrorCode.INVALID_ID,
+                message_id=message_id,
+                conversation=conversation,
+            )
+        if encoded_id < (1 << 64):
+            return reference_failure(
+                ResolutionStatus.REJECTED,
+                ResolutionErrorCode.INVALID_ID,
+                message_id=message_id,
+                conversation=conversation,
+            )
+        scene, _, peer_id = msg_deid(encoded_id)
+        if scene == 1:
+            resolved_kind = ConversationKind.GROUP
+        elif scene == 0:
+            resolved_kind = ConversationKind.PRIVATE
+        else:
+            return reference_failure(
+                ResolutionStatus.REJECTED,
+                ResolutionErrorCode.INVALID_ID,
+                message_id=message_id,
+                conversation=conversation,
+            )
+        if resolved_kind is not conversation.kind or str(peer_id) != conversation.conversation_id:
+            return reference_failure(
+                ResolutionStatus.REJECTED,
+                ResolutionErrorCode.CONVERSATION_MISMATCH,
+                message_id=message_id,
+                conversation=conversation,
+            )
+        try:
+            timeout_seconds = positive_timeout_seconds(timeout_seconds)
+        except ValueError:
+            return reference_failure(
+                ResolutionStatus.REJECTED,
+                ResolutionErrorCode.INVALID_TIMEOUT,
+                message_id=message_id,
+                conversation=conversation,
+            )
+        try:
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._get_msg_sync,
+                    str(encoded_id),
+                    timeout_seconds=timeout_seconds,
+                    attempts=1,
+                ),
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            return reference_failure(
+                ResolutionStatus.ERROR,
+                ResolutionErrorCode.TIMEOUT,
+                message_id=message_id,
+                conversation=conversation,
+            )
+        except Exception:
+            return reference_failure(
+                ResolutionStatus.ERROR,
+                ResolutionErrorCode.UPSTREAM_ERROR,
+                message_id=message_id,
+                conversation=conversation,
+            )
+        if getattr(response, "status", None) != "ok" or getattr(response, "ret_code", None) not in (0, None):
+            return reference_failure(
+                ResolutionStatus.ERROR,
+                ResolutionErrorCode.UPSTREAM_ERROR,
+                message_id=message_id,
+                conversation=conversation,
+            )
+        data = getattr(response, "data", None)
+        sender = getattr(data, "sender", None)
+        return reference_success(
+            expected=conversation,
+            message_id=message_id,
+            resolved_kind=resolved_kind,
+            resolved_conversation_id=str(peer_id),
+            sender_id=getattr(sender, "user_id", None),
+            sent_at=getattr(data, "time", None),
+            segments=response_segments(response),
+        )
+
+    async def resolve_media(
+            self,
+            request: MediaRequest,
+            *,
+            conversation: ConversationKey,
+            policy: MediaPolicy = DEFAULT_MEDIA_POLICY,
+    ) -> MediaResolution:
+        if conversation.protocol != self.protocol:
+            return media_failure(
+                request,
+                ResolutionStatus.REJECTED,
+                ResolutionErrorCode.CONVERSATION_MISMATCH,
+            )
+        return await resolve_media_request(request, policy)
 
 
 async def tester(
@@ -605,7 +784,13 @@ async def tester(
 
 def __handler(data: Union[dict, HyperNotify], actions: Actions) -> None:
     if isinstance(data, dict):
-        asyncio.run(handler(events.em.new(data), actions))
+        event_data = data.copy()
+        event_data["protocol"] = "milky"
+        event_data.setdefault(
+            "conversation_id",
+            event_data.get("group_id") if event_data.get("group_id") not in (None, 0, "0") else event_data.get("user_id"),
+        )
+        asyncio.run(handler(events.em.new(event_data), actions))
     else:
         asyncio.run(handler(data, actions))
 

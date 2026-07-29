@@ -244,22 +244,33 @@ class MilkyHttpConnection(WebsocketConnection):
             else:
                 continue
 
-    def http_send(self, endpoint: str, data: dict) -> dict:
+    def http_send(
+            self,
+            endpoint: str,
+            data: dict,
+            *,
+            timeout_seconds: float = 15.0,
+            attempts: int = 3,
+    ) -> dict:
         if not data:
             data = dict()
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        if attempts <= 0:
+            raise ValueError("attempts must be positive")
         base_url = self.url
         if base_url.startswith("ws://"):
             base_url = "http://" + base_url[len("ws://"):]
         elif base_url.startswith("wss://"):
             base_url = "https://" + base_url[len("wss://"):]
-        for attempt in range(3):
+        for attempt in range(attempts):
             try:
-                kwargs = {"json": data, "timeout": 15.0}
+                kwargs = {"json": data, "timeout": timeout_seconds}
                 if self.auth:
                     kwargs["headers"] = {"Authorization": f"Bearer {self.auth}"}
                 response = httpx.post(f"{base_url}/api/{endpoint}", **kwargs)
             except httpx.RequestError as exc:
-                if attempt < 2:
+                if attempt < attempts - 1:
                     time.sleep(0.5 * (attempt + 1))
                     continue
                 return {
@@ -273,7 +284,7 @@ class MilkyHttpConnection(WebsocketConnection):
                 res = response.json()
             except json.JSONDecodeError:
                 raw_text = response.text[:500] if isinstance(response.text, str) else ""
-                if response.status_code in (502, 503, 504) and attempt < 2:
+                if response.status_code in (502, 503, 504) and attempt < attempts - 1:
                     time.sleep(0.5 * (attempt + 1))
                     continue
                 return {

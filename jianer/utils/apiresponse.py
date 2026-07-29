@@ -3,6 +3,7 @@ from typing import Union, Literal
 
 from ..events import PrivateSender, GroupSender, gen_message
 from ..common import Message
+from ..adapters.contracts import ExternalId, normalize_external_id
 
 
 class BaseResponse(ABC):
@@ -21,26 +22,26 @@ class BaseResponse(ABC):
 
 
 class MsgSendRsp(BaseResponse):
-    message_id: int
+    message_id: ExternalId
 
     def inner_build(self, json_data: dict):
-        self.message_id = json_data["message_id"]
+        self.message_id = normalize_external_id(json_data["message_id"], "message_id")
 
     @classmethod
-    def build(cls, message_id: int):
+    def build(cls, message_id: ExternalId):
         return cls({"message_id": message_id})
 
 
 class GetLoginInfoRsp(BaseResponse):
-    user_id: int
+    user_id: ExternalId
     nickname: str
 
     def inner_build(self, json_data: dict):
-        self.user_id = json_data["user_id"]
+        self.user_id = normalize_external_id(json_data["user_id"], "user_id")
         self.nickname = json_data["nickname"]
 
     @classmethod
-    def build(cls, user_id: int, nickname: str):
+    def build(cls, user_id: ExternalId, nickname: str):
         return cls({"user_id": user_id, "nickname": nickname})
 
 
@@ -71,38 +72,38 @@ class SendForwardRsp(BaseResponse):
 
 
 class SendGrpForwardRsp(BaseResponse):
-    message_id: int
+    message_id: ExternalId
     forward_id: str
 
     def inner_build(self, json_data: dict):
-        self.message_id = json_data["message_id"]
-        self.forward_id = json_data["forward_id"]
+        self.message_id = normalize_external_id(json_data["message_id"], "message_id")
+        self.forward_id = str(json_data.get("forward_id") or "")
 
     @classmethod
-    def build(cls, message_id: int, forward_id: str):
+    def build(cls, message_id: ExternalId, forward_id: ExternalId):
         return cls({"message_id": message_id, "forward_id": forward_id})
 
 
 class GetStrInfoRsp(BaseResponse):
-    user_id: int
+    user_id: ExternalId
     nickname: str
     sex: str
     age: int
 
     def inner_build(self, json_data: dict):
-        self.user_id = json_data["user_id"]
+        self.user_id = normalize_external_id(json_data["user_id"], "user_id")
         self.nickname = json_data["nickname"]
         self.sex = json_data["sex"]
         self.age = json_data["age"]
 
     @classmethod
-    def build(cls, user_id: int, nickname: str, sex: str, age: int):
+    def build(cls, user_id: ExternalId, nickname: str, sex: str, age: int):
         return cls({"user_id": user_id, "nickname": nickname, "sex": sex, "age": age})
 
 
 class GetGrpMemInfoRsp(BaseResponse):
-    group_id: int
-    user_id: int
+    group_id: ExternalId
+    user_id: ExternalId
     nickname: str
     card: str
     sex: str
@@ -118,8 +119,8 @@ class GetGrpMemInfoRsp(BaseResponse):
     card_changeable: bool
 
     def inner_build(self, json_data: dict):
-        self.group_id = json_data["group_id"]
-        self.user_id = json_data["user_id"]
+        self.group_id = normalize_external_id(json_data["group_id"], "group_id")
+        self.user_id = normalize_external_id(json_data["user_id"], "user_id")
         self.nickname = json_data["nickname"]
         self.card = json_data["card"]
         self.sex = json_data["sex"]
@@ -140,19 +141,19 @@ class GetGrpMemInfoRsp(BaseResponse):
 
 
 class GetGrpInfoRsp(BaseResponse):
-    group_id: int
+    group_id: ExternalId
     group_name: str
     member_count: int
     max_member_count: int
 
     def inner_build(self, json_data: dict):
-        self.group_id = json_data["group_id"]
+        self.group_id = normalize_external_id(json_data["group_id"], "group_id")
         self.group_name = json_data["group_name"]
         self.member_count = json_data["member_count"]
         self.max_member_count = json_data["max_member_count"]
 
     @classmethod
-    def build(cls, group_id: int, group_name: str, member_count: int, max_member_count: int):
+    def build(cls, group_id: ExternalId, group_name: str, member_count: int, max_member_count: int):
         return cls(
             {
                 "group_id": group_id,
@@ -166,16 +167,16 @@ class GetGrpInfoRsp(BaseResponse):
 class GetMsgRsp(BaseResponse):
     time: int
     message_type: Literal["private", "group"]
-    message_id: int
-    real_id: int
+    message_id: ExternalId
+    real_id: ExternalId
     sender: Union[PrivateSender, GroupSender]
     message: Message
 
     def inner_build(self, json_data: dict):
         self.time = json_data["time"]
         self.message_type = json_data["message_type"]
-        self.message_id = json_data["message_id"]
-        self.real_id = json_data["real_id"]
+        self.message_id = normalize_external_id(json_data["message_id"], "message_id")
+        self.real_id = normalize_external_id(json_data["real_id"], "real_id")
         self.sender = GroupSender(
             json_data["sender"]
         ) if self.message_type == "group" else PrivateSender(
@@ -185,7 +186,8 @@ class GetMsgRsp(BaseResponse):
 
     @classmethod
     def build(
-            cls, time: int, message_type: Literal["private", "group"], message_id: int, real_id: int, sender: dict,
+            cls, time: int, message_type: Literal["private", "group"], message_id: ExternalId,
+            real_id: ExternalId, sender: dict,
             message: dict
     ):
         return cls(

@@ -18,9 +18,30 @@ from ..events import *
 from .. import common, configurator, events, hyperogger, segments
 from ..utils import errors
 from .FeishuLib.client import FeishuClient
-from .FeishuLib.translator import build_hyper_event, stringify_feishu_message
+from .FeishuLib.translator import (
+    build_hyper_event,
+    feishu_message_to_segments,
+    stringify_feishu_message,
+)
 from .FeishuLib.Manager import reports as feishu_reports
 from ..utils.typextensions import ObjectedJson
+from ..adapters.contracts import (
+    Capability,
+    ConversationKey,
+    ConversationKind,
+    DEFAULT_MEDIA_POLICY,
+    ExternalId,
+    MediaPolicy,
+    MediaRequest,
+    MediaResolution,
+    ReferenceResolution,
+    ResolutionErrorCode,
+    ResolutionStatus,
+    normalize_external_id,
+)
+from ..adapters.media import unsupported_media
+from ..adapters.resolution import reference_failure, reference_success
+from ..adapters.resolution import positive_timeout_seconds
 
 config = configurator.BotConfig.get("jianer-bot")
 logger = hyperogger.Logger()
@@ -73,6 +94,14 @@ def setup_lark_log_bridge() -> None:
 
 
 class Actions:
+    protocol = "feishu"
+    capabilities = frozenset({
+        Capability.RESOLVE_REFERENCE,
+        Capability.SEND_REPLY,
+        Capability.SEND_IMAGE,
+        Capability.SEND_AUDIO,
+    })
+
     def __init__(self, client: FeishuClient):
         self.client = client
 
@@ -138,7 +167,8 @@ class Actions:
         return echo
 
     async def send(
-        self, message: Union[common.Message, str], group_id: int = None, user_id: int = None
+        self, message: Union[common.Message, str], group_id: ExternalId = None,
+        user_id: ExternalId = None
     ) -> common.Ret[MsgSendRsp]:
         if isinstance(message, str):
             message = common.Message(segments.Text(message))
@@ -215,17 +245,17 @@ class Actions:
         logger.info(f"向{(('群 ' + str(group_id)) if group_id else ('用户' + str(user_id))) + ' '}发送：{str(message)}")
         return _fetch_ret(echo, MsgSendRsp)
 
-    async def del_message(self, message_id: int) -> None:
+    async def del_message(self, message_id: ExternalId) -> None:
         try:
             self.client.delete_message(str(message_id))
         except Exception:
             pass
         logger.info(f"撤回 {message_id}")
 
-    async def set_group_kick(self, group_id: int, user_id: int) -> None:
+    async def set_group_kick(self, group_id: ExternalId, user_id: ExternalId) -> None:
         logger.warning("Feishu 当前不支持 set_group_kick，已忽略")
 
-    async def set_group_ban(self, group_id: int, user_id: int, duration: int = 60) -> None:
+    async def set_group_ban(self, group_id: ExternalId, user_id: ExternalId, duration: int = 60) -> None:
         logger.warning("Feishu 当前不支持 set_group_ban，已忽略")
 
     async def get_login_info(self) -> common.Ret[GetLoginInfoRsp]:
@@ -246,30 +276,29 @@ class Actions:
         return _fetch_ret(echo, GetVerInfoRsp)
 
     async def send_forward_msg(self, message: common.Message) -> common.Ret[SendForwardRsp]:
-        text = "\n".join(str(seg) for seg in message)
-        echo = self._make_echo("send_forward_msg")
-        self._put_result(echo, data={"res_id": text})
-        return _fetch_ret(echo, SendForwardRsp)
+        raise errors.NotSupportError(
+            "Feishu does not provide a native forward-message API; "
+            "call send() explicitly for a text fallback."
+        )
 
     async def get_forward_msg(self, sid: str) -> common.Ret[common.Message]:
-        echo = self._make_echo("get_forward_msg")
-        self._put_result(echo, data={"message": []})
-        return _fetch_ret(echo, events.gen_message)
+        raise errors.NotSupportError(
+            "Feishu does not provide a native forwarded-message fetch API."
+        )
 
     async def forward_solve(self, message: common.Message) -> common.Message:
         return common.Message(segments.Text(str(message)))
 
-    async def send_group_forward_msg(self, group_id: int, message: common.Message) -> common.Ret[SendGrpForwardRsp]:
-        sent = await self.send(message=str(message), group_id=group_id)
-        message_id = sent.data.message_id
-        echo = self._make_echo("send_group_forward_msg")
-        self._put_result(echo, data={"message_id": message_id, "forward_id": str(message_id)})
-        return _fetch_ret(echo, SendGrpForwardRsp)
+    async def send_group_forward_msg(self, group_id: ExternalId, message: common.Message) -> common.Ret[SendGrpForwardRsp]:
+        raise errors.NotSupportError(
+            "Feishu does not provide native group-forward messages; "
+            "call send() explicitly for a text fallback."
+        )
 
     async def set_group_add_request(self, flag: str, sub_type: str, approve: bool, reason: str = "Not Mentioned") -> None:
         logger.warning("Feishu 当前不支持 set_group_add_request，已忽略")
 
-    async def get_stranger_info(self, user_id: int) -> common.Ret[GetStrInfoRsp]:
+    async def get_stranger_info(self, user_id: ExternalId) -> common.Ret[GetStrInfoRsp]:
         user = self.client.get_user(str(user_id))
         echo = self._make_echo("get_stranger_info")
         self._put_result(
@@ -283,7 +312,7 @@ class Actions:
         )
         return _fetch_ret(echo, GetStrInfoRsp)
 
-    async def get_group_member_info(self, group_id: int, user_id: int) -> common.Ret[GetGrpMemInfoRsp]:
+    async def get_group_member_info(self, group_id: ExternalId, user_id: ExternalId) -> common.Ret[GetGrpMemInfoRsp]:
         echo = self._make_echo("get_group_member_info")
         self._put_result(
             echo,
@@ -307,7 +336,7 @@ class Actions:
         )
         return _fetch_ret(echo, GetGrpMemInfoRsp)
 
-    async def get_group_info(self, group_id: int) -> common.Ret[GetGrpInfoRsp]:
+    async def get_group_info(self, group_id: ExternalId) -> common.Ret[GetGrpInfoRsp]:
         group = self.client.get_chat(str(group_id))
         echo = self._make_echo("get_group_info")
         self._put_result(
@@ -326,13 +355,13 @@ class Actions:
         self._put_result(echo, data={"online": True})
         return _fetch_ret(echo)
 
-    async def set_essence_msg(self, message_id: int) -> None:
+    async def set_essence_msg(self, message_id: ExternalId) -> None:
         logger.warning("Feishu 当前不支持 set_essence_msg，已忽略")
 
-    async def set_group_special_title(self, group_id: int, user_id: int, title: str) -> None:
+    async def set_group_special_title(self, group_id: ExternalId, user_id: ExternalId, title: str) -> None:
         logger.warning("Feishu 当前不支持 set_group_special_title，已忽略")
 
-    async def get_msg(self, msg_id: int) -> common.Ret[GetMsgRsp]:
+    async def get_msg(self, msg_id: ExternalId) -> common.Ret[GetMsgRsp]:
         msg = self.client.get_message(str(msg_id))
         chat_type = str(msg.get("chat_type") or "group").lower()
         message_type = "private" if chat_type == "p2p" else "group"
@@ -363,8 +392,125 @@ class Actions:
         )
         return _fetch_ret(echo, GetMsgRsp)
 
-    async def send_callback(self, group_id: int, bot_id: int, data: dict) -> None:
+    async def send_callback(self, group_id: ExternalId, bot_id: ExternalId, data: dict) -> None:
         logger.warning("Feishu 当前不支持 send_callback，已忽略")
+
+    async def resolve_reference(
+        self,
+        message_id: ExternalId,
+        *,
+        conversation: ConversationKey,
+        timeout_seconds: float = 10.0,
+    ) -> ReferenceResolution:
+        if conversation.protocol != self.protocol:
+            return reference_failure(
+                ResolutionStatus.REJECTED,
+                ResolutionErrorCode.CONVERSATION_MISMATCH,
+                message_id=message_id,
+                conversation=conversation,
+            )
+        try:
+            normalized_id = normalize_external_id(message_id, "message_id")
+        except ValueError:
+            return reference_failure(
+                ResolutionStatus.REJECTED,
+                ResolutionErrorCode.INVALID_ID,
+                message_id=message_id,
+                conversation=conversation,
+            )
+        try:
+            timeout_seconds = positive_timeout_seconds(timeout_seconds)
+        except ValueError:
+            return reference_failure(
+                ResolutionStatus.REJECTED,
+                ResolutionErrorCode.INVALID_TIMEOUT,
+                message_id=message_id,
+                conversation=conversation,
+            )
+        try:
+            msg = await asyncio.wait_for(
+                asyncio.to_thread(self.client.get_message, normalized_id),
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            return reference_failure(
+                ResolutionStatus.ERROR,
+                ResolutionErrorCode.TIMEOUT,
+                message_id=message_id,
+                conversation=conversation,
+            )
+        except Exception as exc:
+            if "404" in str(exc):
+                return reference_failure(
+                    ResolutionStatus.NOT_FOUND,
+                    ResolutionErrorCode.REFERENCE_NOT_FOUND,
+                    message_id=message_id,
+                    conversation=conversation,
+                )
+            return reference_failure(
+                ResolutionStatus.ERROR,
+                ResolutionErrorCode.UPSTREAM_ERROR,
+                message_id=message_id,
+                conversation=conversation,
+            )
+        if not isinstance(msg, dict) or not msg:
+            return reference_failure(
+                ResolutionStatus.ERROR,
+                ResolutionErrorCode.MALFORMED_RESPONSE,
+                message_id=message_id,
+                conversation=conversation,
+            )
+
+        chat_type = str(msg.get("chat_type") or "").casefold()
+        resolved_kind = (
+            ConversationKind.PRIVATE
+            if chat_type == "p2p"
+            else ConversationKind.GROUP
+        )
+        resolved_conversation_id = msg.get("chat_id")
+        sender = msg.get("sender") if isinstance(msg.get("sender"), dict) else {}
+        sender_identity = sender.get("sender_id") if isinstance(sender.get("sender_id"), dict) else {}
+        sender_id = (
+            sender.get("id")
+            or sender_identity.get("open_id")
+            or sender_identity.get("user_id")
+            or sender_identity.get("union_id")
+        )
+        raw_time = msg.get("create_time") or msg.get("update_time")
+        try:
+            sent_at = int(raw_time)
+            if sent_at >= 10_000_000_000:
+                sent_at //= 1000
+        except (TypeError, ValueError):
+            sent_at = None
+        try:
+            segment_dicts = feishu_message_to_segments(msg)
+            resolved_message = events.gen_message({"message": segment_dicts})
+        except Exception:
+            return reference_failure(
+                ResolutionStatus.ERROR,
+                ResolutionErrorCode.MALFORMED_RESPONSE,
+                message_id=message_id,
+                conversation=conversation,
+            )
+        return reference_success(
+            expected=conversation,
+            message_id=message_id,
+            resolved_kind=resolved_kind,
+            resolved_conversation_id=resolved_conversation_id,
+            sender_id=sender_id,
+            sent_at=sent_at,
+            segments=tuple(resolved_message),
+        )
+
+    async def resolve_media(
+        self,
+        request: MediaRequest,
+        *,
+        conversation: ConversationKey,
+        policy: MediaPolicy = DEFAULT_MEDIA_POLICY,
+    ) -> MediaResolution:
+        return unsupported_media(request)
 
 
 async def tester(message_data: Union[Event, HyperNotify], actions: Actions) -> None:
