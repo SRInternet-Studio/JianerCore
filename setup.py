@@ -28,7 +28,7 @@ setup(
         "aiohttp~=3.9.5",
         "arclet-alconna~=1.8",
         "requests~=2.31.0",
-        "httpx~=0.26.0",
+        "httpx>=0.28.1,<0.29",
         "lark-oapi~=1.6.8",
         "loguru~=0.7.3",
         "grpclib~=0.4.7",
