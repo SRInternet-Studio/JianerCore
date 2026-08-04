@@ -27,7 +27,7 @@ from .plugins.runtime import (
     current_plugin_owner,
 )
 
-JIANER_BOT_VERSION = "0.92.1"
+JIANER_BOT_VERSION = "0.92.2"
 
 # listener = None
 

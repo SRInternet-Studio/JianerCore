@@ -4,6 +4,7 @@ import httpx
 import json
 import os
 import time
+import websocket
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -172,6 +173,10 @@ class MilkyHttpConnection(WebsocketConnection):
     def recv(self) -> dict:
         while True:
             raw = self.ws.recv()
+            if raw in (None, "", b""):
+                raise websocket.WebSocketConnectionClosedException(
+                    "Milky event stream closed"
+                )
             try:
                 milky_rp = json.loads(raw)
             except json.JSONDecodeError:

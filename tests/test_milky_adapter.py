@@ -1,7 +1,11 @@
 import asyncio
-import pytest
+from types import SimpleNamespace
 
-from jianer import common
+import pytest
+import websocket
+
+from jianer import common, configurator
+from jianer.LecAdapters import Milky
 from jianer.LecAdapters.Milky import Actions
 from jianer.LecAdapters.MilkyLib import translator
 from jianer.LecAdapters.MilkyLib.Manager import Packet, reports
@@ -26,6 +30,67 @@ class _MilkySegment:
 
     def __str__(self):
         return str(self.payload)
+
+
+def test_milky_listener_recreates_connection_after_websocket_close(monkeypatch):
+    connections = []
+
+    class FakeConnection:
+        def __init__(self, url, auth=None):
+            self.url = url
+            self.auth = auth
+            self.connected = False
+            self.closed = False
+            connections.append(self)
+
+        def connect(self):
+            self.connected = True
+
+        def recv(self):
+            if len(connections) >= 2:
+                Milky.listener_ran = False
+            raise websocket.WebSocketConnectionClosedException("closed")
+
+        def close(self):
+            self.closed = True
+
+    class DummyThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    connection_config = configurator.BotHTTPC(
+        host="127.0.0.1",
+        port=3010,
+        listener_host="127.0.0.1",
+        listener_port=0,
+        retries=1,
+        auth="secret",
+    )
+    monkeypatch.setattr(
+        Milky,
+        "config",
+        SimpleNamespace(get_connection=lambda protocol=None: connection_config),
+    )
+    monkeypatch.setattr(Milky, "MilkyHttpConnection", FakeConnection)
+    monkeypatch.setattr(Milky.threading, "Thread", DummyThread)
+    monkeypatch.setattr(Milky, "handler", lambda *args, **kwargs: None)
+
+    Milky.run()
+
+    assert len(connections) == 2
+    assert all(connection.connected for connection in connections)
+    assert all(connection.closed for connection in connections)
+
+
+def test_milky_empty_websocket_frame_is_treated_as_disconnect(monkeypatch):
+    connection = MilkyHttpConnection("ws://127.0.0.1:3010")
+    monkeypatch.setattr(connection.ws, "recv", lambda: "")
+
+    with pytest.raises(websocket.WebSocketConnectionClosedException):
+        connection.recv()
 
 
 def test_milky_message_translator_accepts_common_field_variants():

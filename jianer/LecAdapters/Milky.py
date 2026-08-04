@@ -37,6 +37,8 @@ import asyncio
 import json
 import sys
 
+import websocket
+
 config = configurator.BotConfig.get("jianer-bot")
 logger = hyperogger.Logger()
 logger.set_level(config.log_level if config else "INFO")
@@ -807,6 +809,22 @@ def reg(func: callable) -> None:
 connection: MilkyHttpConnection
 
 
+def _new_connection(conn_config) -> MilkyHttpConnection:
+    if isinstance(conn_config, (configurator.BotWSC, configurator.BotHTTPC)):
+        return MilkyHttpConnection(
+            f"ws://{conn_config.host}:{conn_config.port}",
+            auth=getattr(conn_config, "auth", None),
+        )
+    raise TypeError("Milky requires a WebSocket or HTTP client connection")
+
+
+def _close_connection(current_connection: MilkyHttpConnection) -> None:
+    try:
+        current_connection.close()
+    except Exception:
+        pass
+
+
 def run() -> NoReturn:
     global connection, listener_ran
     listener_ran = True
@@ -814,22 +832,14 @@ def run() -> NoReturn:
         if handler is tester:
             raise errors.ListenerNotRegisteredError("No handler registered")
         conn_config = config.get_connection("Milky")
-        if isinstance(conn_config, configurator.BotWSC):
-            connection = MilkyHttpConnection(
-                f"ws://{conn_config.host}:{conn_config.port}",
-                auth=getattr(conn_config, "auth", None)
-            )
-        elif isinstance(conn_config, configurator.BotHTTPC):
-            connection = MilkyHttpConnection(
-                f"ws://{conn_config.host}:{conn_config.port}",
-                auth=getattr(conn_config, "auth", None)
-            )
         retried = 0
 
         while listener_ran:
+            connection = _new_connection(conn_config)
             try:
                 connection.connect()
-            except (ConnectionRefusedError, TimeoutError):
+            except (OSError, websocket.WebSocketException):
+                _close_connection(connection)
                 if retried >= conn_config.retries:
                     logger.critical(f"重试次数达到最大值({conn_config.retries})，退出")
                     break
@@ -850,19 +860,19 @@ def run() -> NoReturn:
             while listener_ran:
                 try:
                     data = connection.recv()
-                except ConnectionResetError:
-                    logger.error("连接断开")
+                except (OSError, websocket.WebSocketException) as error:
+                    logger.error(
+                        f"连接断开({type(error).__name__})，准备重新连接"
+                    )
                     break
                 except json.decoder.JSONDecodeError:
                     logger.error("收到错误的JSON内容")
                     continue
                 threading.Thread(target=lambda: __handler(data, actions), daemon=True).start()
+            _close_connection(connection)
     except KeyboardInterrupt:
         logger.warning("正在退出(Ctrl+C)")
-        try:
-            connection.close()
-        except:
-            pass
+        _close_connection(connection)
         sys.exit()
 
 
