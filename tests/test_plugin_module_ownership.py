@@ -54,25 +54,49 @@ def _generation_helper(manager: PluginManager):
     return matches[0]
 
 
-def test_generation_logs_use_canonical_plugin_module_names(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("plugin_directory", "plugin_id", "helper_module"),
+    [
+        ("JianerAI", "jianerbot-plugin-jianer-ai", "observability"),
+        ("MaimaiDX", "jianerbot-plugin-maimaidx", "config"),
+    ],
+)
+def test_generation_logs_use_canonical_plugin_module_names(
+    tmp_path,
+    monkeypatch,
+    plugin_directory,
+    plugin_id,
+    helper_module,
+):
     monkeypatch.syspath_prepend(str(tmp_path))
     plugins = tmp_path / "plugins"
-    plugin = plugins / "JianerAI"
+    plugin = plugins / plugin_directory
     plugin.mkdir(parents=True)
     _write(
-        plugin / "observability.py",
+        plugin / f"{helper_module}.py",
         """
+        from loguru import logger as direct_loguru_logger
+
+        direct_loguru_logger.info("direct-import-log-name")
+
         def safe_log_info(logger, message):
             logger.info(message)
+
+        def direct_log_info(message):
+            direct_loguru_logger.info(message)
         """,
     )
     _write(
+        plugin / "__init__.py",
+        f"from .{helper_module} import direct_log_info, safe_log_info\n",
+    )
+    _write(
         plugin / "setup.py",
-        """
+        f"""
         from jianer.plugins import PluginMetadata
-        from plugins.JianerAI.observability import safe_log_info
+        from plugins.{plugin_directory} import direct_log_info, safe_log_info
 
-        __plugin_meta__ = PluginMetadata(name="jianerbot-plugin-jianer-ai")
+        __plugin_meta__ = PluginMetadata(name={plugin_id!r})
 
         def log_from_entry(logger, message):
             logger.info(message)
@@ -86,26 +110,45 @@ def test_generation_logs_use_canonical_plugin_module_names(tmp_path, monkeypatch
     try:
         result = manager.load_plugins(plugins)
         assert result.failed == []
-        entry = manager.plugins["jianerbot-plugin-jianer-ai"].module
+        entry = manager.plugins[plugin_id].module
         helper_runtime_name = entry.safe_log_info.__module__
-        assert entry.__name__.startswith("jianer_user_plugin_JianerAI_")
+        assert entry.__name__.startswith(f"jianer_user_plugin_{plugin_directory}_")
         assert helper_runtime_name.startswith("_jianer_plugin_generation_")
 
         entry.log_from_entry(plugin_logger, "entry-log-name")
         entry.safe_log_info(plugin_logger, "helper-log-name")
+        entry.direct_log_info("direct-log-name")
 
         records_by_message = {
             item.record["message"]: item.record
             for item in records
-            if item.record["message"] in {"entry-log-name", "helper-log-name"}
+            if item.record["message"]
+            in {
+                "entry-log-name",
+                "helper-log-name",
+                "direct-log-name",
+                "direct-import-log-name",
+            }
         }
-        assert records_by_message["entry-log-name"]["name"] == (
-            "jianerbot-plugin-jianer-ai"
+        expected_helper_name = f"{plugin_id}.{helper_module}"
+        assert records_by_message["direct-import-log-name"]["name"] == (
+            expected_helper_name
         )
-        assert records_by_message["helper-log-name"]["name"] == (
-            "jianerbot-plugin-jianer-ai.observability"
-        )
+        assert records_by_message["entry-log-name"]["name"] == plugin_id
+        assert records_by_message["helper-log-name"]["name"] == expected_helper_name
         assert records_by_message["helper-log-name"]["function"] == "safe_log_info"
+        assert records_by_message["direct-log-name"]["name"] == expected_helper_name
+        assert records_by_message["direct-log-name"]["function"] == "direct_log_info"
+
+        asyncio.run(manager.shutdown())
+        records.clear()
+        entry.direct_log_info("post-shutdown-log-name")
+        post_shutdown = next(
+            item.record
+            for item in records
+            if item.record["message"] == "post-shutdown-log-name"
+        )
+        assert post_shutdown["name"] == helper_runtime_name
     finally:
         asyncio.run(manager.shutdown())
         loguru_logger.remove(sink_id)

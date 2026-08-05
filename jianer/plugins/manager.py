@@ -20,7 +20,12 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from ..log_names import register_module_log_name, unregister_module_log_name
+from ..log_names import (
+    register_module_log_name,
+    register_module_log_prefix,
+    unregister_module_log_name,
+    unregister_module_log_prefix,
+)
 from .loader import DISABLED_PREFIX, PLUGIN_EXTENSIONS, PLUGIN_FOLDER, LoadResult
 from .metadata import PLUGIN_NAME_PREFIX, Plugin, PluginMetadata, is_valid_plugin_name
 from .runtime import (
@@ -108,6 +113,7 @@ class PluginManager:
         self._owned_modules: dict[str, list[OwnedModule]] = {}
         self._displaced_modules: dict[str, list[_DisplacedModule]] = {}
         self._generation_namespaces: dict[str, str] = {}
+        self._generation_log_prefixes: dict[str, str] = {}
         self._generation_modules: dict[str, dict[str, ModuleType]] = {}
         self._generation_sources: dict[str, dict[Path, bytes]] = {}
         self._entry_module_names: dict[str, str] = {}
@@ -930,6 +936,9 @@ class PluginManager:
             plugin_id,
             f"_jianer_plugin_generation_{self.manager_id}_{uuid.uuid4().hex}",
         )
+        generation_log_prefix = f"{namespace}.{prefix}"
+        self._generation_log_prefixes[plugin_id] = generation_log_prefix
+        register_module_log_prefix(generation_log_prefix, plugin_id)
         modules = self._generation_modules.setdefault(plugin_id, {})
         self._ensure_generation_namespace(plugin_id, namespace)
 
@@ -1382,6 +1391,9 @@ class PluginManager:
             unregister_module_log_name(name)
             self._remove_module_identity(name, module)
         self._generation_namespaces.pop(plugin_id, None)
+        generation_log_prefix = self._generation_log_prefixes.pop(plugin_id, None)
+        if generation_log_prefix is not None:
+            unregister_module_log_prefix(generation_log_prefix)
         self._generation_sources.pop(plugin_id, None)
         entry_module_name = self._entry_module_names.pop(plugin_id, None)
         if entry_module_name is not None:

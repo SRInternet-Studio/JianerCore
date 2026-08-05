@@ -41,6 +41,7 @@ _config = configurator.BotConfig.get("jianer-bot")
 
 
 def _configure_loguru() -> None:
+    loguru_logger.configure(patcher=patch_log_record)
     try:
         loguru_logger.remove(0)
     except ValueError:
@@ -63,7 +64,7 @@ class Logger:
 
     def __init__(self, level: str | None = None):
         self.log_level = levels.INFO
-        self._logger = loguru_logger.patch(patch_log_record)
+        self._logger = loguru_logger
         self.set_level(level or (_config.log_level if _config else levels.INFO))
 
     @classmethod

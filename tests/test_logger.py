@@ -14,6 +14,10 @@ def test_logger_configures_native_loguru_console_sink(monkeypatch):
             self.removed = []
             self.sink = None
             self.options = None
+            self.configure_options = None
+
+        def configure(self, **options):
+            self.configure_options = options
 
         def remove(self, handler_id):
             self.removed.append(handler_id)
@@ -28,6 +32,7 @@ def test_logger_configures_native_loguru_console_sink(monkeypatch):
     hyperogger._configure_loguru()
 
     assert fake_loguru.removed == [0]
+    assert fake_loguru.configure_options["patcher"] is hyperogger.patch_log_record
     assert fake_loguru.sink is sys.stderr
     assert fake_loguru.options["level"] == "TRACE"
     assert "format" not in fake_loguru.options
