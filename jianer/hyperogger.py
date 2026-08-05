@@ -5,7 +5,6 @@ import typing
 from loguru import logger as loguru_logger
 
 from . import configurator
-from .utils.screens import NerdICONs
 
 
 class Levels:
@@ -38,26 +37,6 @@ class Levels:
 levels = Levels()
 
 _config = configurator.BotConfig.get("jianer-bot")
-_nf_icons = NerdICONs(bool(_config and _config.log_use_nf))
-_level_icons = {
-    levels.TRACE: _nf_icons.nf_cod_debug_breakpoint_log,
-    levels.DEBUG: _nf_icons.nf_cod_debug_alt,
-    levels.INFO: _nf_icons.nf_fa_circle_info,
-    levels.WARNING: _nf_icons.nf_fa_warn,
-    levels.ERROR: _nf_icons.nf_cod_error,
-    levels.CRITICAL: _nf_icons.nf_cod_bracket_error,
-}
-
-
-def _format_record(record: dict) -> str:
-    level_name = record["level"].name
-    icon = _level_icons.get(level_name, " ")
-    label = level_name.title()
-    return (
-        "<blue>{time:YYYY-MM-DD HH:mm:ss.SS}</blue> "
-        f"<level>|{icon} {label:<8} |</level> "
-        "<level>{message}</level>\n{exception}"
-    )
 
 
 def _configure_loguru() -> None:
@@ -67,10 +46,8 @@ def _configure_loguru() -> None:
         pass
 
     loguru_logger.add(
-        sys.stdout,
+        sys.stderr,
         level=levels.TRACE,
-        format=_format_record,
-        colorize=True,
         backtrace=True,
         diagnose=False,
         enqueue=False,
@@ -133,30 +110,33 @@ class Logger:
     def _enabled(self, level: str) -> bool:
         return levels.level_nums[level] >= levels.level_nums[self.log_level]
 
-    def log(self, message: typing.Any, level: str = levels.INFO) -> None:
+    def _emit(self, message: typing.Any, level: str) -> None:
         normalized = str(level).upper()
         if normalized not in levels.level_names:
             raise ValueError(f"Unsupported log level: {level}")
         if self._enabled(normalized):
-            self._logger.opt(depth=1).log(normalized, str(message))
+            self._logger.opt(depth=2).log(normalized, str(message))
+
+    def log(self, message: typing.Any, level: str = levels.INFO) -> None:
+        self._emit(message, level)
 
     def info(self, message: typing.Any) -> None:
-        self.log(message, levels.INFO)
+        self._emit(message, levels.INFO)
 
     def warning(self, message: typing.Any) -> None:
-        self.log(message, levels.WARNING)
+        self._emit(message, levels.WARNING)
 
     def error(self, message: typing.Any) -> None:
-        self.log(message, levels.ERROR)
+        self._emit(message, levels.ERROR)
 
     def critical(self, message: typing.Any) -> None:
-        self.log(message, levels.CRITICAL)
+        self._emit(message, levels.CRITICAL)
 
     def debug(self, message: typing.Any) -> None:
-        self.log(message, levels.DEBUG)
+        self._emit(message, levels.DEBUG)
 
     def trace(self, message: typing.Any) -> None:
-        self.log(message, levels.TRACE)
+        self._emit(message, levels.TRACE)
 
     def exception(self, message: typing.Any) -> None:
         if self._enabled(levels.ERROR):
