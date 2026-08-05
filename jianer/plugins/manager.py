@@ -20,6 +20,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+from ..log_names import register_module_log_name, unregister_module_log_name
 from .loader import DISABLED_PREFIX, PLUGIN_EXTENSIONS, PLUGIN_FOLDER, LoadResult
 from .metadata import PLUGIN_NAME_PREFIX, Plugin, PluginMetadata, is_valid_plugin_name
 from .runtime import (
@@ -802,6 +803,7 @@ class PluginManager:
             )
             self._entry_module_names[plugin_id] = unique_module_name
             sys.modules[unique_module_name] = module
+            register_module_log_name(unique_module_name, plugin_id)
             with plugin_runtime_scope(self.manager_id, plugin_id):
                 spec.loader.exec_module(module)
             self._record_owned_modules(plugin_id, candidate)
@@ -1059,7 +1061,12 @@ class PluginManager:
                 plugin_id,
                 candidate,
             )
-        self._register_generation_module(plugin_id, qualified_name, module)
+        self._register_generation_module(
+            plugin_id,
+            candidate,
+            qualified_name,
+            module,
+        )
         if source is not None:
             try:
                 with plugin_runtime_scope(self.manager_id, plugin_id):
@@ -1102,7 +1109,12 @@ class PluginManager:
             plugin_id,
             candidate,
         )
-        self._register_generation_module(plugin_id, qualified_name, module)
+        self._register_generation_module(
+            plugin_id,
+            candidate,
+            qualified_name,
+            module,
+        )
         try:
             with plugin_runtime_scope(self.manager_id, plugin_id):
                 exec(
@@ -1121,11 +1133,15 @@ class PluginManager:
     def _register_generation_module(
         self,
         plugin_id: str,
+        candidate: _PluginCandidate,
         name: str,
         module: ModuleType,
     ) -> None:
         self._generation_modules.setdefault(plugin_id, {})[name] = module
         sys.modules[name] = module
+        display_name = _generation_module_log_name(plugin_id, candidate, module)
+        if display_name is not None:
+            register_module_log_name(name, display_name)
         parent_name, separator, attribute = name.rpartition(".")
         if separator:
             parent = sys.modules.get(parent_name)
@@ -1138,6 +1154,7 @@ class PluginManager:
         name: str,
         module: ModuleType,
     ) -> None:
+        unregister_module_log_name(name)
         self._remove_module_identity(name, module)
         self._generation_modules.get(plugin_id, {}).pop(name, None)
 
@@ -1362,10 +1379,13 @@ class PluginManager:
             key=lambda item: item[0].count("."),
             reverse=True,
         ):
+            unregister_module_log_name(name)
             self._remove_module_identity(name, module)
         self._generation_namespaces.pop(plugin_id, None)
         self._generation_sources.pop(plugin_id, None)
-        self._entry_module_names.pop(plugin_id, None)
+        entry_module_name = self._entry_module_names.pop(plugin_id, None)
+        if entry_module_name is not None:
+            unregister_module_log_name(entry_module_name)
         if restore_displaced:
             self._restore_displaced_modules(plugin_id)
         else:
@@ -1457,6 +1477,28 @@ def _plugin_import_prefix(candidate: _PluginCandidate) -> str | None:
     if root is None or not root.is_dir():
         return None
     return f"{root.parent.name}.{root.name}"
+
+
+def _generation_module_log_name(
+    plugin_id: str,
+    candidate: _PluginCandidate,
+    module: ModuleType,
+) -> str | None:
+    root = candidate.plugin_root
+    module_file = _resolved_module_file(module)
+    if root is None or module_file is None or not root.is_dir():
+        return None
+    try:
+        relative = module_file.relative_to(root.resolve())
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if relative.name == "__init__.py":
+        module_parts = relative.parent.parts
+    else:
+        module_parts = relative.with_suffix("").parts
+    if not module_parts:
+        return plugin_id
+    return ".".join((plugin_id, *module_parts))
 
 
 def _resolved_module_file(module: ModuleType) -> Path | None:

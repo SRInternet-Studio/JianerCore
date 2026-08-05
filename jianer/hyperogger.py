@@ -5,6 +5,7 @@ import typing
 from loguru import logger as loguru_logger
 
 from . import configurator
+from .log_names import patch_log_record
 
 
 class Levels:
@@ -62,7 +63,7 @@ class Logger:
 
     def __init__(self, level: str | None = None):
         self.log_level = levels.INFO
-        self._logger = loguru_logger
+        self._logger = loguru_logger.patch(patch_log_record)
         self.set_level(level or (_config.log_level if _config else levels.INFO))
 
     @classmethod

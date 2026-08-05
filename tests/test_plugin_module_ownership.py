@@ -7,8 +7,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from loguru import logger as loguru_logger
 
-from jianer import Client
+from jianer import Client, hyperogger
 from jianer.plugins import PluginManager, PluginSetupError
 from jianer.plugins.builtin import alconna
 
@@ -51,6 +52,63 @@ def _generation_helper(manager: PluginManager):
     ]
     assert len(matches) == 1
     return matches[0]
+
+
+def test_generation_logs_use_canonical_plugin_module_names(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(tmp_path))
+    plugins = tmp_path / "plugins"
+    plugin = plugins / "JianerAI"
+    plugin.mkdir(parents=True)
+    _write(
+        plugin / "observability.py",
+        """
+        def safe_log_info(logger, message):
+            logger.info(message)
+        """,
+    )
+    _write(
+        plugin / "setup.py",
+        """
+        from jianer.plugins import PluginMetadata
+        from plugins.JianerAI.observability import safe_log_info
+
+        __plugin_meta__ = PluginMetadata(name="jianerbot-plugin-jianer-ai")
+
+        def log_from_entry(logger, message):
+            logger.info(message)
+        """,
+    )
+    records = []
+    sink_id = loguru_logger.add(records.append, level="TRACE")
+    plugin_logger = hyperogger.Logger("INFO")
+    manager = PluginManager(logger=plugin_logger)
+
+    try:
+        result = manager.load_plugins(plugins)
+        assert result.failed == []
+        entry = manager.plugins["jianerbot-plugin-jianer-ai"].module
+        helper_runtime_name = entry.safe_log_info.__module__
+        assert entry.__name__.startswith("jianer_user_plugin_JianerAI_")
+        assert helper_runtime_name.startswith("_jianer_plugin_generation_")
+
+        entry.log_from_entry(plugin_logger, "entry-log-name")
+        entry.safe_log_info(plugin_logger, "helper-log-name")
+
+        records_by_message = {
+            item.record["message"]: item.record
+            for item in records
+            if item.record["message"] in {"entry-log-name", "helper-log-name"}
+        }
+        assert records_by_message["entry-log-name"]["name"] == (
+            "jianerbot-plugin-jianer-ai"
+        )
+        assert records_by_message["helper-log-name"]["name"] == (
+            "jianerbot-plugin-jianer-ai.observability"
+        )
+        assert records_by_message["helper-log-name"]["function"] == "safe_log_info"
+    finally:
+        asyncio.run(manager.shutdown())
+        loguru_logger.remove(sink_id)
 
 
 def test_two_alconna_managers_have_isolated_matchers(tmp_path):
