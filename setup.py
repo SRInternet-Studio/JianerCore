@@ -25,7 +25,7 @@ setup(
     },
     packages=find_namespace_packages(include=["jianer", "jianer.*"]),
     install_requires=[
-        "aiohttp~=3.9.5",
+        "aiohttp",
         "arclet-alconna~=1.8",
         "requests~=2.31.0",
         "httpx>=0.28.1,<0.29",
