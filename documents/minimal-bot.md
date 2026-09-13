@@ -47,17 +47,19 @@ mode = FWS
   "owner": [],
   "black_list": [],
   "silents": [],
-  "connection": {
-    "mode": "FWS",
-    "ob_auto_startup": false,
-    "ob_exec": "",
-    "ob_startup_path": "",
-    "ob_log_output": false,
-    "host": "127.0.0.1",
-    "port": 5004,
-    "retries": 5,
-    "token": "",
-    "auth": ""
+  "connections": {
+    "OneBot": {
+      "mode": "FWS",
+      "ob_auto_startup": false,
+      "ob_exec": "",
+      "ob_startup_path": "",
+      "ob_log_output": false,
+      "host": "127.0.0.1",
+      "port": 5004,
+      "retries": 5,
+      "token": "",
+      "auth": ""
+    }
   },
   "log_level": "INFO",
   "log_use_nf": false,
@@ -67,7 +69,7 @@ mode = FWS
 }
 ```
 
-如果你的 OneBot 服务设置了访问令牌，把它填入 `connection.token` 或按对应适配器配置要求填写。
+如果你的 OneBot 服务设置了访问令牌，把它填入 `connections.OneBot.token` 或按对应适配器配置要求填写。`connections` 按协议名分组，`protocol` 决定使用哪一组；旧版顶层 `connection` 字段已移除。
 
 ## 方案一：最小单文件 bot
 

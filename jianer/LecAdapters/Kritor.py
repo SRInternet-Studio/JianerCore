@@ -229,29 +229,26 @@ def run():
         global connection
         if handler is tester:
             raise errors.ListenerNotRegisteredError("No handler registered")
-        # connection = websocket.WebSocket()
-        # if isinstance(config.connection, Configurator.WSConnectionC):
-        #     connection = Network.WebsocketConnection(f"ws://{config.connection.host}:{config.connection.port}")
-        # elif isinstance(config.connection, Configurator.HTTPConnectionC):
-        #     connection = Network.HTTPConnection(
-        #         url=f"http://{config.connection.host}:{config.connection.port}",
-        #         listener_url=f"http://{config.connection.listener_host}:{config.connection.listener_port}"
-        #     )
+        conn_config = config.get_connection("Kritor")
+        if conn_config is None:
+            raise errors.ListenerNotRegisteredError(
+                "未找到 Kritor 连接配置，请在配置文件的 `connections.Kritor` 中填写连接信息"
+            )
         connection = KritorConnection(
-            host=config.connection.host,
-            port=config.connection.port,
+            host=conn_config.host,
+            port=conn_config.port,
         )
         retried = 0
         while listener_ran:
             try:
                 connection.connect()
             except ConnectionRefusedError or TimeoutError:
-                if retried >= config.connection.retries:
-                    logger.log(f"重试次数达到最大值({config.connection.retries})，退出",
+                if retried >= conn_config.retries:
+                    logger.log(f"重试次数达到最大值({conn_config.retries})，退出",
                                level=hyperogger.levels.CRITICAL)
                     break
 
-                logger.log(f"连接建立失败，3秒后重试({retried}/{config.connection.retries})",
+                logger.log(f"连接建立失败，3秒后重试({retried}/{conn_config.retries})",
                            level=hyperogger.levels.WARNING)
                 retried += 1
                 time.sleep(3)

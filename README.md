@@ -91,17 +91,19 @@ with Client() as client:
   "owner": [],
   "black_list": [],
   "silents": [],
-  "connection": {
-    "mode": "FWS",
-    "ob_auto_startup": false,
-    "ob_exec": "./Lagrange.OneBot/Lagrange.OneBot",
-    "ob_startup_path": "./Lagrange.OneBot/",
-    "ob_log_output": false,
-    "host": "127.0.0.1",
-    "port": 5004,
-    "retries": 5,
-    "token": "",
-    "auth": ""
+  "connections": {
+    "OneBot": {
+      "mode": "FWS",
+      "ob_auto_startup": false,
+      "ob_exec": "./Lagrange.OneBot/Lagrange.OneBot",
+      "ob_startup_path": "./Lagrange.OneBot/",
+      "ob_log_output": false,
+      "host": "127.0.0.1",
+      "port": 5004,
+      "retries": 5,
+      "token": "",
+      "auth": ""
+    }
   },
   "log_level": "INFO",
   "log_use_nf": false,
@@ -116,11 +118,13 @@ with Client() as client:
 - `owner`：机器人所有者的 QQ 号列表
 - `black_list`：需要标记为已屏蔽的用户或群列表
 - `silents`：需要静默处理的用户或群列表
-- `connection.mode`：连接模式，`FWS` 表示正向 WebSocket，`HTTPC` 表示 HTTP
-- `connection.host`：OneBot 服务地址
-- `connection.port`：OneBot 服务端口
-- `connection.retries`：连接失败后的最大重试次数
-- `connection.ob_auto_startup`：是否由框架启动 OneBot 实现
+- `protocol`：当前启用的协议（`OneBot` / `Milky` / `Kritor` / `Feishu`），决定从 `connections` 中读取哪一组连接信息
+- `connections`：按协议名分组的连接配置，每个协议一个子对象（旧版顶层 `connection` 字段已移除，会被忽略并输出警告）
+- `connections.OneBot.mode`：连接模式，`FWS` 表示正向 WebSocket，`HTTPC` 表示 HTTP
+- `connections.OneBot.host`：OneBot 服务地址
+- `connections.OneBot.port`：OneBot 服务端口
+- `connections.OneBot.retries`：连接失败后的最大重试次数
+- `connections.OneBot.ob_auto_startup`：是否由框架启动 OneBot 实现
 - `log_level`：日志等级
 
 ## 项目结构

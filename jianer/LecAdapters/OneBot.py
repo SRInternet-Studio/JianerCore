@@ -384,12 +384,13 @@ class LagrangeOneBotService(IServiceBase):
         pass
 
     async def server(self, bot_config: configurator.BotConfig) -> None:
+        conn_config = bot_config.get_connection("OneBot")
         proc = subprocess.Popen(
-            args=config.connection.ob_exec,
-            cwd=config.connection.ob_startup_path,
+            args=conn_config.ob_exec,
+            cwd=conn_config.ob_startup_path,
             stdout=subprocess.PIPE
         )
-        if bot_config.connection.ob_log_output:
+        if conn_config.ob_log_output:
             for i in proc.stdout:
                 print(i.decode(), end="")
 
@@ -400,26 +401,31 @@ def run() -> NoReturn:
     try:
         if handler is tester:
             raise errors.ListenerNotRegisteredError("No handler registered")
-        if isinstance(config.connection, configurator.BotWSC):
-            connection = network.WebsocketConnection(f"ws://{config.connection.host}:{config.connection.port}")
-        elif isinstance(config.connection, configurator.BotHTTPC):
+        conn_config = config.get_connection("OneBot")
+        if conn_config is None:
+            raise errors.ListenerNotRegisteredError(
+                "未找到 OneBot 连接配置，请在配置文件的 `connections.OneBot` 中填写连接信息"
+            )
+        if isinstance(conn_config, configurator.BotWSC):
+            connection = network.WebsocketConnection(f"ws://{conn_config.host}:{conn_config.port}")
+        elif isinstance(conn_config, configurator.BotHTTPC):
             connection = network.HTTPConnection(
-                url=f"http://{config.connection.host}:{config.connection.port}",
-                listener_url=f"http://{config.connection.listener_host}:{config.connection.listener_port}"
+                url=f"http://{conn_config.host}:{conn_config.port}",
+                listener_url=f"http://{conn_config.listener_host}:{conn_config.listener_port}"
             )
         retried = 0
-        if config.connection.ob_auto_startup:
+        if conn_config.ob_auto_startup:
             LagrangeOneBotService(IServiceStartUp.MANUAL).run_in_thread(config)
 
         while listener_ran:
             try:
                 connection.connect()
             except ConnectionRefusedError or TimeoutError:
-                if retried >= config.connection.retries:
-                    logger.critical(f"重试次数达到最大值({config.connection.retries})，退出")
+                if retried >= conn_config.retries:
+                    logger.critical(f"重试次数达到最大值({conn_config.retries})，退出")
                     break
 
-                logger.warning(f"连接建立失败，3秒后重试({retried}/{config.connection.retries})")
+                logger.warning(f"连接建立失败，3秒后重试({retried}/{conn_config.retries})")
                 retried += 1
                 time.sleep(3)
                 continue

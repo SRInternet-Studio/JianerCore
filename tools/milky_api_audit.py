@@ -326,7 +326,13 @@ def _cases() -> list[EndpointCase]:
 
 def _load_context(config_path: Path, group_id: int | None, user_id: int | None) -> AuditContext:
     config = json.loads(config_path.read_text(encoding="utf-8"))
-    connection = config["connection"]
+    connections = config.get("connections") or config.get("Connections") or {}
+    connection = next(
+        (value for key, value in connections.items() if str(key).lower() == "milky"),
+        None,
+    )
+    if connection is None:
+        raise KeyError("config.json 缺少 `connections.Milky` 连接配置")
     base_url = f"http://{connection['host']}:{connection['port']}"
     owners = config.get("owner") or []
     return AuditContext(

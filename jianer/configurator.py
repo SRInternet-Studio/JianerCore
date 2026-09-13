@@ -1,4 +1,5 @@
 from cfgr.manager import BaseConfig
+from loguru import logger
 
 
 def _canon_protocol(protocol: str) -> str:
@@ -13,12 +14,6 @@ def _canon_protocol(protocol: str) -> str:
         "lark": "Feishu",
     }
     return mapping.get(str(protocol or "OneBot").strip().lower(), str(protocol or "OneBot").strip())
-
-
-def _conn_value(connection, name: str, default=None):
-    if isinstance(connection, dict):
-        return connection.get(name, default)
-    return getattr(connection, name, default)
 
 
 class BotWSC(BaseConfig):
@@ -92,10 +87,6 @@ class BotConfig(BaseConfig):
     silents: list
     Connections: dict
     connections: dict
-    connection: BotHTTPC
-    connection: BotWSC
-    connection: BotFeishuC
-    connection: dict
     log_level: str = "INFO"
     log_use_nf: bool = False
     uin: int
@@ -123,6 +114,11 @@ class BotConfig(BaseConfig):
         return BotWSC(**connection)
 
     def get_connection(self, protocol: str = None) -> object:
+        """Return the parsed connection config for ``protocol`` (defaults to the active one).
+
+        ``connections`` is the single source of truth; the legacy top-level
+        ``connection`` field is no longer supported.
+        """
         protocol = _canon_protocol(protocol or self.protocol)
         for attr in ("connections", "Connections"):
             connections = getattr(self, attr, None)
@@ -130,38 +126,21 @@ class BotConfig(BaseConfig):
                 for key, value in connections.items():
                     if _canon_protocol(key) == protocol:
                         return self._build_connection(protocol, value)
-        return self._build_connection(protocol, getattr(self, "connection", None))
+        return None
 
     def custom_post(self, **kwargs):
+        if "connection" in kwargs:
+            logger.warning(
+                "配置项 `connection` 已被移除并将被忽略，请改用 `connections`（按协议名分组）。"
+            )
+
         connections = getattr(self, "connections", None)
         if connections is None:
             connections = getattr(self, "Connections", None)
-        if isinstance(connections, dict):
-            parsed_connections = {}
-            for protocol, connection in connections.items():
-                parsed_connections[_canon_protocol(protocol)] = self._build_connection(protocol, connection)
-            self.connections = parsed_connections
-            if getattr(self, "connection", None) is None:
-                active_protocol = _canon_protocol(getattr(self, "protocol", "OneBot"))
-                active_connection = parsed_connections.get(active_protocol)
-                if active_connection is not None:
-                    self.connection = active_connection
-
-        connection = getattr(self, "connection", None)
-        if connection is None or isinstance(connection, (BotHTTPC, BotWSC, BotFeishuC)):
+        if not isinstance(connections, dict):
             return
 
-        if self.protocol == "OneBot":
-            if _conn_value(connection, "mode") == "FWS":
-                self.connection = BotWSC(**connection)
-            elif _conn_value(connection, "mode") == "HTTPC":
-                self.connection = BotHTTPC(**connection)
-        elif self.protocol == "Kritor":
-            self.connection = BotWSC(**connection)
-        elif self.protocol == "Milky":
-            if _conn_value(connection, "mode") == "FWS":
-                self.connection = BotWSC(**connection)
-            elif _conn_value(connection, "mode") == "HTTPC":
-                self.connection = BotHTTPC(**connection)
-        elif self.protocol == "Feishu":
-            self.connection = BotFeishuC(**connection)
+        parsed_connections = {}
+        for protocol, connection in connections.items():
+            parsed_connections[_canon_protocol(protocol)] = self._build_connection(protocol, connection)
+        self.connections = parsed_connections
