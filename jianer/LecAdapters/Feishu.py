@@ -5,7 +5,7 @@ import importlib
 import json
 import os
 import queue
-import random
+import uuid
 import threading
 import time
 import logging
@@ -120,7 +120,7 @@ class Actions:
 
     @staticmethod
     def _make_echo(prefix: str) -> str:
-        return f"{prefix}_{random.randint(1000, 9999)}"
+        return f"{prefix}_{uuid.uuid4().hex}"
 
     @staticmethod
     def _put_result(echo: str, data: dict = None, status: str = "ok", retcode: int = 0) -> None:

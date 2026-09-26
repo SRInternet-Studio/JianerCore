@@ -13,6 +13,7 @@ from ..utils.apiresponse import *
 from ..LecAdapters.OneBotLib.Manager import reports, Packet
 from ..events import *
 from ..utils.hypetyping import Any, Union, NoReturn
+from ..utils.typextensions import ObjectedJson
 from ..adapters.contracts import (
     Capability,
     ConversationKey,
@@ -40,6 +41,11 @@ config = configurator.BotConfig.get("jianer-bot")
 logger = hyperogger.Logger()
 logger.set_level(config.log_level if config else "INFO")
 listener_ran = False
+RESPONSE_TIMEOUT = 30.0
+
+
+async def _fetch_ret(echo: str, serializer=ObjectedJson) -> common.Ret:
+    return common.Ret(await reports.get_async(echo, RESPONSE_TIMEOUT), serializer)
 
 
 class Actions:
@@ -103,7 +109,7 @@ class Actions:
             raise errors.ArgsInvalidError("'send' API requires 'group_id' or 'user_id' but none of them are provided.")
         packet.send_to(self.connection)
         logger.info(f"向{(('群 ' + str(group_id)) if group_id else ('用户' + str(user_id))) + ' '}发送：{str(message)}")
-        return common.Ret.fetch(packet.echo, MsgSendRsp)
+        return await _fetch_ret(packet.echo, MsgSendRsp)
 
     async def del_message(self, message_id: ExternalId) -> None:
         Packet(
@@ -132,12 +138,12 @@ class Actions:
     async def get_login_info(self) -> common.Ret[GetLoginInfoRsp]:
         packet = Packet("get_login_info")
         packet.send_to(self.connection)
-        return common.Ret.fetch(packet.echo, GetLoginInfoRsp)
+        return await _fetch_ret(packet.echo, GetLoginInfoRsp)
 
     async def get_version_info(self) -> common.Ret[GetVerInfoRsp]:
         packet = Packet("get_version_info")
         packet.send_to(self.connection)
-        return common.Ret.fetch(packet.echo, GetVerInfoRsp)
+        return await _fetch_ret(packet.echo, GetVerInfoRsp)
 
     async def send_forward_msg(self, message: common.Message) -> common.Ret[SendForwardRsp]:
         packet = Packet(
@@ -145,7 +151,7 @@ class Actions:
             messages=await message.get()
         )
         packet.send_to(self.connection)
-        return common.Ret.fetch(packet.echo, SendForwardRsp)
+        return await _fetch_ret(packet.echo, SendForwardRsp)
 
     async def get_forward_msg(self, sid: str) -> common.Ret[common.Message]:
         packet = Packet(
@@ -153,7 +159,7 @@ class Actions:
             id=sid,
         )
         packet.send_to(self.connection)
-        ret = common.Ret.fetch(packet.echo, events.gen_message)
+        ret = await _fetch_ret(packet.echo, events.gen_message)
         for i in ret.data:
             if isinstance(i, segments.Node):
                 i.content = gen_message({"message": i.content})
@@ -174,7 +180,7 @@ class Actions:
             messages=await message.get()
         )
         packet.send_to(self.connection)
-        return common.Ret.fetch(packet.echo, SendGrpForwardRsp)
+        return await _fetch_ret(packet.echo, SendGrpForwardRsp)
 
     async def set_group_add_request(self, flag: str, sub_type: str, approve: bool,
                                     reason: str = "Not Mentioned") -> None:
@@ -194,7 +200,7 @@ class Actions:
             no_cache=True,
         )
         packet.send_to(self.connection)
-        return common.Ret.fetch(packet.echo, GetStrInfoRsp)
+        return await _fetch_ret(packet.echo, GetStrInfoRsp)
 
     async def get_group_member_info(self, group_id: ExternalId, user_id: ExternalId) -> common.Ret[GetGrpMemInfoRsp]:
         packet = Packet(
@@ -204,7 +210,7 @@ class Actions:
             no_cache=True
         )
         packet.send_to(self.connection)
-        return common.Ret.fetch(packet.echo, GetGrpMemInfoRsp)
+        return await _fetch_ret(packet.echo, GetGrpMemInfoRsp)
 
     async def get_group_info(self, group_id: ExternalId) -> common.Ret[GetGrpInfoRsp]:
         packet = Packet(
@@ -213,12 +219,12 @@ class Actions:
             no_cache=True
         )
         packet.send_to(self.connection)
-        return common.Ret.fetch(packet.echo, GetGrpInfoRsp)
+        return await _fetch_ret(packet.echo, GetGrpInfoRsp)
 
     async def get_status(self) -> common.Ret:
         packet = Packet("get_status")
         packet.send_to(self.connection)
-        return common.Ret.fetch(packet.echo)
+        return await _fetch_ret(packet.echo)
 
     async def set_essence_msg(self, message_id: ExternalId) -> None:
         Packet(
@@ -240,9 +246,7 @@ class Actions:
             message_id=self._numeric_id(msg_id, "message_id")
         )
         packet.send_to(self.connection)
-        while packet.echo not in reports.contents:
-            await asyncio.sleep(0.01)
-        return common.Ret(reports.contents[packet.echo], GetMsgRsp)
+        return await _fetch_ret(packet.echo, GetMsgRsp)
 
     async def send_callback(self, group_id: ExternalId, bot_id: ExternalId, data: dict) -> None:
         Packet(

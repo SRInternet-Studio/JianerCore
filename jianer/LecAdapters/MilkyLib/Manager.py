@@ -2,7 +2,7 @@ from ... import configurator, hyperogger
 from ...utils import logic
 from .translator import MilkyHttpConnection
 
-import random
+import uuid
 
 reports = logic.KeyQueue()
 
@@ -21,7 +21,7 @@ class Packet:
     def __init__(self, endpoint: str, **kwargs):
         self.endpoint = endpoint
         self.paras = kwargs
-        self.echo = f"{endpoint}_{random.randint(1000, 9999)}"
+        self.echo = f"{endpoint}_{uuid.uuid4().hex}"
 
     def send_to(
             self,

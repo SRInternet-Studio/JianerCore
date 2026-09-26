@@ -6,6 +6,7 @@ import aiohttp
 import time
 import requests
 import inspect
+import threading
 from functools import wraps
 
 from .. import hyperogger
@@ -280,20 +281,67 @@ class Downloader:
 
 
 class KeyQueue:
-    def __init__(self):
+    """Thread-safe keyed mailbox: each value is consumed by exactly one get."""
+
+    def __init__(self, ttl: float = 300.0):
+        self.ttl = ttl
         self.contents = {}
+        self._stamps = {}
+        self._cond = threading.Condition()
+        self._async_waiters = {}
+
+    def _expire(self) -> None:
+        # Drop responses nobody claimed (e.g. the caller already timed out).
+        deadline = time.monotonic() - self.ttl
+        for key in [k for k, stamp in self._stamps.items() if stamp < deadline]:
+            self.contents.pop(key, None)
+            self._stamps.pop(key, None)
+
+    def _pop(self, key: str) -> Any:
+        self._stamps.pop(key, None)
+        return self.contents.pop(key)
+
+    @staticmethod
+    def _wake(fut: asyncio.Future) -> None:
+        if not fut.done():
+            fut.set_result(None)
 
     def put(self, key: str, obj: Any) -> None:
-        if key in list(self.contents.keys()):
-            return
-        self.contents[key] = obj
+        with self._cond:
+            self._expire()
+            self.contents[key] = obj
+            self._stamps[key] = time.monotonic()
+            self._cond.notify_all()
+            for loop, fut in self._async_waiters.get(key, []):
+                loop.call_soon_threadsafe(self._wake, fut)
 
-    def get(self, key: str) -> Any:
-        while 1:
+    def get(self, key: str, timeout: float = None) -> Any:
+        with self._cond:
+            if not self._cond.wait_for(lambda: key in self.contents, timeout):
+                raise TimeoutError(f"Timed out waiting for response '{key}'")
+            return self._pop(key)
+
+    async def get_async(self, key: str, timeout: float = None) -> Any:
+        loop = asyncio.get_running_loop()
+        deadline = None if timeout is None else loop.time() + timeout
+        while True:
+            with self._cond:
+                if key in self.contents:
+                    return self._pop(key)
+                waiter = (loop, loop.create_future())
+                self._async_waiters.setdefault(key, []).append(waiter)
             try:
-                return self.contents[key]
-            except KeyError:
-                pass
+                remaining = None if deadline is None else max(deadline - loop.time(), 0)
+                await asyncio.wait_for(waiter[1], remaining)
+            except asyncio.TimeoutError:
+                raise TimeoutError(f"Timed out waiting for response '{key}'") from None
+            finally:
+                with self._cond:
+                    waiters = self._async_waiters.get(key, [])
+                    if waiter in waiters:
+                        waiters.remove(waiter)
+                    if not waiters:
+                        self._async_waiters.pop(key, None)
 
 
 class SimpleQueue:
