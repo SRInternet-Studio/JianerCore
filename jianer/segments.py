@@ -110,13 +110,24 @@ class Node(SegmentBase, st="node", su="[Node]"):
     nickname: str
     content: Union[dict, "common.Message"]
 
+    def to_json(self) -> dict:
+        data = super().to_json()
+        node = data["data"]
+        # OneBot implementations disagree on the node keys: the spec uses
+        # user_id/nickname while go-cqhttp, LLOneBot and friends read uin/name.
+        node.setdefault("uin", node.get("user_id"))
+        node.setdefault("name", node.get("nickname"))
+        return data
+
 
 class CustomNode:
     def __init__(self, user_id: str, nick_name: str, content):
         self.content = {"type": "node",
                         "data": {
                             "user_id": user_id,
+                            "uin": user_id,
                             "nickname": nick_name,
+                            "name": nick_name,
                             "nick_name": nick_name,
                             "content": content.get_sync()
                         }}

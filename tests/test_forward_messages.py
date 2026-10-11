@@ -38,15 +38,17 @@ def _milky_actions(monkeypatch, responder):
     return MilkyActions(connection), calls
 
 
-def test_custom_node_emits_onebot_nickname_key():
+def test_custom_node_emits_every_onebot_sender_key():
     node = segments.CustomNode("12345", "Alice", common.Message(segments.Text("hi")))
 
     data = node.to_json()["data"]
 
-    # OneBot v11 reads `nickname`; the legacy `nick_name` alias is kept for older consumers.
+    # Spec key (nickname/user_id), go-cqhttp/LLOneBot key (name/uin) and the legacy alias.
     assert data["nickname"] == "Alice"
+    assert data["name"] == "Alice"
     assert data["nick_name"] == "Alice"
     assert data["user_id"] == "12345"
+    assert data["uin"] == "12345"
 
 
 def test_node_segment_with_message_content_serializes():
@@ -56,7 +58,9 @@ def test_node_segment_with_message_content_serializes():
         "type": "node",
         "data": {
             "user_id": "12345",
+            "uin": "12345",
             "nickname": "Alice",
+            "name": "Alice",
             "content": [{"type": "text", "data": {"text": "hi"}}],
         },
     }]
@@ -78,7 +82,9 @@ def test_onebot_group_forward_carries_node_sender_name():
 
     node = connection.sent[0]["params"]["messages"][0]
     assert node["data"]["nickname"] == "bot"
+    assert node["data"]["name"] == "bot"
     assert node["data"]["user_id"] == "12345"
+    assert node["data"]["uin"] == "12345"
 
 
 def test_onebot_get_forward_msg_reads_llbot_sender_object():
