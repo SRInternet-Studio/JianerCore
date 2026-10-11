@@ -410,14 +410,18 @@ class Actions:
                     consume_segments(item.get("segments")), peer_id=0, scene=0
                 )
                 nodes.append(segments.Node(
-                    str(item.get("user_id", 0)),
-                    str(item.get("sender_name", "")),
+                    str(item.get("user_id") or item.get("sender_id") or 0),
+                    str(item.get("sender_name") or item.get("nickname") or item.get("name") or ""),
                     events.gen_message({"message": onebot_segments}),
                 ))
             res["data"] = common.Message(*nodes)
         return _fetch_ret(packet.echo, lambda data: data)
 
     async def forward_solve(self, message: common.Message) -> common.Message:
+        for item in message:
+            if isinstance(item, segments.Forward):
+                data = await self.get_forward_msg(item.id)
+                return data.data
         return message
 
     async def send_group_forward_msg(self, group_id: ExternalId, message: common.Message) -> common.Ret[SendGrpForwardRsp]:

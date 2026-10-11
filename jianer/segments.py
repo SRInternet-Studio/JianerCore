@@ -114,7 +114,12 @@ class Node(SegmentBase, st="node", su="[Node]"):
 class CustomNode:
     def __init__(self, user_id: str, nick_name: str, content):
         self.content = {"type": "node",
-                        "data": {"user_id": user_id, "nick_name": nick_name, "content": content.get_sync()}}
+                        "data": {
+                            "user_id": user_id,
+                            "nickname": nick_name,
+                            "nick_name": nick_name,
+                            "content": content.get_sync()
+                        }}
 
     def to_json(self) -> dict:
         return self.content

@@ -56,8 +56,15 @@ class SegmentBase(ABC):
         data = {}
         for name, annotation in self.__anns.items():
             value = getattr(self, name)
-            if value is not None:
+            if value is None:
+                continue
+            if hasattr(value, "get_sync"):
+                data[name] = value.get_sync()
+                continue
+            try:
                 data[name] = value if isinstance(value, annotation) else annotation(value)
+            except TypeError:
+                data[name] = value
         return {"type": self.__sg_type, "data": data}
 
     def __str__(self) -> str: return "__not_set__"

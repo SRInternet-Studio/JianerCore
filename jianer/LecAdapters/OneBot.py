@@ -159,12 +159,62 @@ class Actions:
             id=sid,
         )
         packet.send_to(self.connection)
-        ret = await _fetch_ret(packet.echo, events.gen_message)
-        for i in ret.data:
-            if isinstance(i, segments.Node):
-                i.content = gen_message({"message": i.content})
+        return await _fetch_ret(packet.echo, self._forward_nodes)
 
-        return ret
+    @staticmethod
+    def _forward_node_data(entry: dict) -> dict:
+        node_data = entry.get("data")
+        if isinstance(node_data, dict):
+            return node_data
+        return entry
+
+    @staticmethod
+    def _forward_node_text(node_data: dict, *keys: str) -> str:
+        sender = node_data.get("sender")
+        sender = sender if isinstance(sender, dict) else {}
+        for key in keys:
+            value = node_data.get(key)
+            if value in (None, ""):
+                value = sender.get(key)
+            if value not in (None, ""):
+                return str(value)
+        return ""
+
+    @classmethod
+    def _forward_nodes(cls, data) -> common.Message:
+        """Normalize the forwarded-message payload returned by an OneBot implementation.
+
+        Implementations disagree on the envelope (`message` vs `messages`) and on where the
+        node sender lives (`data.nickname`/`data.user_id` vs a nested `sender` object), so read
+        every shape we know about and keep the sender name when it is present.
+        """
+        if isinstance(data, dict):
+            entries = data.get("messages") or data.get("message") or []
+        elif isinstance(data, list):
+            entries = data
+        else:
+            entries = []
+
+        nodes = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            node_data = cls._forward_node_data(entry)
+            user_id = cls._forward_node_text(node_data, "user_id", "uin")
+            nickname = cls._forward_node_text(node_data, "nickname", "nick_name", "name")
+            content = node_data.get("content")
+            if content is None:
+                content = node_data.get("message")
+            if isinstance(content, list):
+                payload = content
+            elif isinstance(content, dict):
+                payload = [content]
+            elif content in (None, ""):
+                payload = []
+            else:
+                payload = [{"type": "text", "data": {"text": str(content)}}]
+            nodes.append(segments.Node(user_id, nickname, events.gen_message({"message": payload})))
+        return common.Message(*nodes)
 
     async def forward_solve(self, message: common.Message) -> common.Message:
         for i in message:
