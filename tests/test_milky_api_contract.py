@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 
@@ -253,6 +254,62 @@ def test_milky_custom_action_passes_through_arbitrary_standard_api(monkeypatch):
     assert calls == [("get_friend_list", {"no_cache": True})]
 
 
+def test_milky_group_add_request_uses_encoded_adapter_flag(monkeypatch):
+    actions, calls = _actions_with_responses(
+        monkeypatch,
+        lambda endpoint, data: {"status": "ok", "retcode": 0, "data": {}},
+    )
+    flag = json.dumps({
+        "group_id": 10001,
+        "is_filtered": True,
+        "notification_seq": 77,
+        "notification_type": "join_request",
+    })
+
+    asyncio.run(actions.set_group_add_request(flag, "add", True))
+    asyncio.run(actions.set_group_add_request(flag, "add", False, "wrong answer"))
+
+    assert calls == [
+        ("accept_group_request", {
+            "notification_seq": 77,
+            "notification_type": "join_request",
+            "group_id": 10001,
+            "is_filtered": True,
+        }),
+        ("reject_group_request", {
+            "notification_seq": 77,
+            "notification_type": "join_request",
+            "group_id": 10001,
+            "is_filtered": True,
+            "reason": "wrong answer",
+        }),
+    ]
+
+
+def test_milky_invited_group_add_request_uses_invite_notification_type(monkeypatch):
+    actions, calls = _actions_with_responses(
+        monkeypatch,
+        lambda endpoint, data: {"status": "ok", "retcode": 0, "data": {}},
+    )
+    flag = json.dumps({
+        "group_id": 10001,
+        "is_filtered": False,
+        "notification_seq": 78,
+        "notification_type": "invited_join_request",
+    })
+
+    asyncio.run(actions.set_group_add_request(flag, "invite", True))
+
+    assert calls == [
+        ("accept_group_request", {
+            "notification_seq": 78,
+            "notification_type": "invited_join_request",
+            "group_id": 10001,
+            "is_filtered": False,
+        }),
+    ]
+
+
 def test_milky_unrepresentable_legacy_actions_fail_explicitly(monkeypatch):
     actions, calls = _actions_with_responses(
         monkeypatch,
@@ -263,7 +320,7 @@ def test_milky_unrepresentable_legacy_actions_fail_explicitly(monkeypatch):
     assert asyncio.run(actions.forward_solve(message)) is message
     with pytest.raises(errors.ArgsInvalidError, match="requires a target"):
         asyncio.run(actions.send_forward_msg(message))
-    with pytest.raises(errors.ArgsInvalidError, match="legacy OneBot flag signature"):
+    with pytest.raises(errors.ArgsInvalidError, match="flag must be generated"):
         asyncio.run(actions.set_group_add_request("flag", "add", True))
     with pytest.raises(errors.ArgsInvalidError, match="does not define a send_callback"):
         asyncio.run(actions.send_callback(10001, 12345, {}))

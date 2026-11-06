@@ -191,6 +191,80 @@ def test_milky_group_member_decrease_is_translated_to_onebot_notice(monkeypatch)
     }
 
 
+def test_milky_group_join_request_is_translated_to_onebot_request(monkeypatch):
+    connection = MilkyHttpConnection("ws://127.0.0.1:3010")
+    monkeypatch.setattr(
+        connection.ws,
+        "recv",
+        lambda: json.dumps({
+            "type": "group_join_request",
+            "time": 1710000002,
+            "self_id": 90001,
+            "data": {
+                "group_id": 10001,
+                "notification_seq": 77,
+                "is_filtered": True,
+                "initiator_id": 12345,
+                "comment": "answer",
+            },
+        }),
+    )
+
+    event = connection.recv()
+
+    assert event["post_type"] == "request"
+    assert event["request_type"] == "group"
+    assert event["sub_type"] == "add"
+    assert event["time"] == 1710000002
+    assert event["self_id"] == 90001
+    assert event["user_id"] == 12345
+    assert event["group_id"] == 10001
+    assert event["comment"] == "answer"
+    assert json.loads(event["flag"]) == {
+        "group_id": 10001,
+        "is_filtered": True,
+        "notification_seq": 77,
+        "notification_type": "join_request",
+    }
+
+
+def test_milky_invited_group_join_request_targets_invitee(monkeypatch):
+    connection = MilkyHttpConnection("ws://127.0.0.1:3010")
+    monkeypatch.setattr(
+        connection.ws,
+        "recv",
+        lambda: json.dumps({
+            "type": "group_invited_join_request",
+            "time": 1710000003,
+            "self_id": 90001,
+            "data": {
+                "group_id": 10001,
+                "notification_seq": 78,
+                "is_filtered": False,
+                "initiator_id": 54321,
+                "target_user_id": 12345,
+            },
+        }),
+    )
+
+    event = connection.recv()
+
+    assert event["post_type"] == "request"
+    assert event["request_type"] == "group"
+    assert event["sub_type"] == "invite"
+    assert event["time"] == 1710000003
+    assert event["self_id"] == 90001
+    assert event["user_id"] == 12345
+    assert event["group_id"] == 10001
+    assert event["comment"] == ""
+    assert json.loads(event["flag"]) == {
+        "group_id": 10001,
+        "is_filtered": False,
+        "notification_seq": 78,
+        "notification_type": "invited_join_request",
+    }
+
+
 def test_milky_packet_stores_echoed_response(monkeypatch):
     connection = MilkyHttpConnection("ws://127.0.0.1:3000")
 

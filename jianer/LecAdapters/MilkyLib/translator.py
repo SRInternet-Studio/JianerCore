@@ -173,6 +173,16 @@ def _event_id(value):
     return numeric if numeric > 0 else None
 
 
+def _event_sequence(value):
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        numeric = int(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if numeric >= 0 else None
+
+
 def _membership_event_data(
         event_type: str,
         event_time: int,
@@ -200,6 +210,36 @@ def _membership_event_data(
         sub_type = "leave"
     return builder.as_group_decrease_event(
         operator_id if operator_id is not None else user_id,
+        sub_type,
+    ).build()
+
+
+def _group_join_request_data(
+        notification_type: str,
+        event_time: int,
+        self_id: int,
+        data: dict,
+) -> dict | None:
+    group_id = _event_id(data.get("group_id"))
+    if notification_type == "invited_join_request":
+        user_id = _event_id(data.get("target_user_id"))
+        sub_type = "invite"
+    else:
+        user_id = _event_id(data.get("initiator_id") or data.get("user_id"))
+        sub_type = "add"
+    notification_seq = _event_sequence(data.get("notification_seq"))
+    if group_id is None or user_id is None or notification_seq is None:
+        return None
+
+    flag = json.dumps({
+        "group_id": group_id,
+        "is_filtered": data.get("is_filtered") is True,
+        "notification_seq": notification_seq,
+        "notification_type": notification_type,
+    }, separators=(",", ":"), sort_keys=True)
+    return OneBotEventBuilder().init(event_time, self_id, user_id, group_id).as_group_add_request(
+        str(data.get("comment") or ""),
+        flag,
         sub_type,
     ).build()
 
@@ -236,6 +276,21 @@ class MilkyHttpConnection(WebsocketConnection):
             if ma("group_member_increase") or ma("group_member_decrease"):
                 event_data = _membership_event_data(
                     milky_event_type,
+                    milky_time,
+                    milky_self_id,
+                    milky_data,
+                )
+                if event_data is not None:
+                    return event_data
+                continue
+            if ma("group_join_request") or ma("group_invited_join_request"):
+                notification_type = (
+                    "invited_join_request"
+                    if ma("group_invited_join_request")
+                    else "join_request"
+                )
+                event_data = _group_join_request_data(
+                    notification_type,
                     milky_time,
                     milky_self_id,
                     milky_data,
