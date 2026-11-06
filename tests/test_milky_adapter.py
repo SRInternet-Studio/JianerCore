@@ -1,4 +1,5 @@
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -129,6 +130,65 @@ def test_milky_event_can_be_unwrapped_from_body_packet():
     assert event["type"] == "message_receive"
     assert event["time"] == 1710000000
     assert event["self_id"] == 12345
+
+
+def test_milky_group_member_increase_is_translated_to_onebot_notice(monkeypatch):
+    connection = MilkyHttpConnection("ws://127.0.0.1:3010")
+    monkeypatch.setattr(
+        connection.ws,
+        "recv",
+        lambda: json.dumps({
+            "type": "group_member_increase",
+            "time": 1710000000,
+            "self_id": 90001,
+            "data": {
+                "group_id": 10001,
+                "user_id": 12345,
+                "operator_id": None,
+                "invitor_id": 54321,
+            },
+        }),
+    )
+
+    assert connection.recv() == {
+        "time": 1710000000,
+        "self_id": 90001,
+        "user_id": 12345,
+        "group_id": 10001,
+        "post_type": "notice",
+        "notice_type": "group_increase",
+        "operator_id": 54321,
+        "sub_type": "invite",
+    }
+
+
+def test_milky_group_member_decrease_is_translated_to_onebot_notice(monkeypatch):
+    connection = MilkyHttpConnection("ws://127.0.0.1:3010")
+    monkeypatch.setattr(
+        connection.ws,
+        "recv",
+        lambda: json.dumps({
+            "type": "group_member_decrease",
+            "time": 1710000001,
+            "self_id": 90001,
+            "data": {
+                "group_id": 10001,
+                "user_id": 12345,
+                "operator_id": 54321,
+            },
+        }),
+    )
+
+    assert connection.recv() == {
+        "time": 1710000001,
+        "self_id": 90001,
+        "user_id": 12345,
+        "group_id": 10001,
+        "post_type": "notice",
+        "notice_type": "group_decrease",
+        "operator_id": 54321,
+        "sub_type": "kick",
+    }
 
 
 def test_milky_packet_stores_echoed_response(monkeypatch):

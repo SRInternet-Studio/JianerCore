@@ -163,6 +163,47 @@ def message_translator(milky_message: list[MilkySegment], peer_id: int, scene: i
     return builder.build()
 
 
+def _event_id(value):
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        numeric = int(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if numeric > 0 else None
+
+
+def _membership_event_data(
+        event_type: str,
+        event_time: int,
+        self_id: int,
+        data: dict,
+) -> dict | None:
+    group_id = _event_id(data.get("group_id"))
+    user_id = _event_id(data.get("user_id"))
+    if group_id is None or user_id is None:
+        return None
+
+    operator_id = _event_id(data.get("operator_id"))
+    builder = OneBotEventBuilder().init(event_time, self_id, user_id, group_id)
+    if event_type == "group_member_increase":
+        invitor_id = _event_id(data.get("invitor_id"))
+        sub_type = "invite" if invitor_id is not None else "approve"
+        return builder.as_group_increase_event(
+            invitor_id if invitor_id is not None else operator_id,
+            sub_type,
+        ).build()
+
+    if operator_id is not None:
+        sub_type = "kick_me" if user_id == self_id else "kick"
+    else:
+        sub_type = "leave"
+    return builder.as_group_decrease_event(
+        operator_id if operator_id is not None else user_id,
+        sub_type,
+    ).build()
+
+
 class MilkyHttpConnection(WebsocketConnection):
     def connect(self) -> None:
         if self.auth:
@@ -192,6 +233,16 @@ class MilkyHttpConnection(WebsocketConnection):
             builder = OneBotEventBuilder()
             if ma("bot_offline"):
                 raise Exception("Bot offline")
+            if ma("group_member_increase") or ma("group_member_decrease"):
+                event_data = _membership_event_data(
+                    milky_event_type,
+                    milky_time,
+                    milky_self_id,
+                    milky_data,
+                )
+                if event_data is not None:
+                    return event_data
+                continue
             if not ma("message_receive"):
                 continue
 
