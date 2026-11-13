@@ -9,6 +9,7 @@ import sys
 import threading
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Union
 
 from .asyncio_runner import (
@@ -27,7 +28,7 @@ from .plugins.runtime import (
     current_plugin_owner,
 )
 
-JIANER_BOT_VERSION = "0.92.10"
+JIANER_BOT_VERSION = "0.93.0"
 
 # listener = None
 
@@ -62,6 +63,12 @@ class Client:
         self._close_report = None
         self._closed = False
         self._restart_task = None
+        self._reload_lock = asyncio.Lock()
+        self._last_load_result = None
+        self._disabled_plugins: list[str] = []
+        self._plugin_folders: tuple[Any, ...] = ()
+        self._last_listener_start = None
+        self._core_command_router = None
 
     def subscribe(
         self,
@@ -136,6 +143,10 @@ class Client:
         message_data: Union["events.Event", "events.HyperNotify"],
         actions: "Listener.Actions",
     ) -> None:
+        from . import events
+
+        if isinstance(message_data, events.HyperListenerStartNotify):
+            self._last_listener_start = (message_data, actions)
         with self._subscription_lock:
             token_ids = list(self._event_tokens.get(type(message_data), ()))
         if not token_ids:
@@ -164,13 +175,196 @@ class Client:
 
         if self.plugin_manager is None:
             self.plugin_manager = PluginManager()
+        if plugin_folders:
+            self._plugin_folders = tuple(plugin_folders)
+        elif not self._plugin_folders:
+            self._plugin_folders = ("plugins",)
         result = self.plugin_manager.load_plugins(*plugin_folders, **kwargs)
         if auto_dispatch and not self._plugin_dispatch_registered:
             self.subscribe(self._dispatch_plugin_message, events.GroupMessageEvent)
             self.subscribe(self._dispatch_plugin_message, events.PrivateMessageEvent)
             self._plugin_dispatch_registered = True
         self.plugin_manager.setup_client(self)
+        self._last_load_result = result
+        self._disabled_plugins = _scan_disabled_plugins(self._plugin_folders[0])
         return result
+
+    @property
+    def last_load_result(self):
+        from .plugins import LoadResult
+
+        return self._last_load_result or LoadResult()
+
+    def disabled_plugins(self) -> list[str]:
+        return list(self._disabled_plugins)
+
+    def _core_router(self):
+        from .core_commands import CoreCommandRouter
+
+        if self._core_command_router is None:
+            self._core_command_router = CoreCommandRouter(self)
+        return self._core_command_router
+
+    def configure_core_commands(
+        self,
+        *,
+        is_admin: Callable[[Any], bool] | None = None,
+        before_reload: Callable[[], Any] | None = None,
+        plugin_view_formatter: Callable[[Any], str] | None = None,
+    ) -> None:
+        self._core_router().configure(
+            is_admin=is_admin,
+            before_reload=before_reload,
+            plugin_view_formatter=plugin_view_formatter,
+        )
+
+    async def dispatch_core_commands(
+        self,
+        event: Any,
+        actions: Any,
+        *,
+        message_text: str | None = None,
+    ) -> bool:
+        return await self._core_router().dispatch(
+            event,
+            actions,
+            message_text=message_text,
+        )
+
+    def plugin_view(self) -> str:
+        return self._core_router().plugin_view_text()
+
+    async def reload_plugins(
+        self,
+        plugin_folder: str | Path | None = None,
+    ):
+        """Stage, swap, and retire a new plugin generation.
+
+        This method is intended for the core command router and other host-level
+        code. It must run outside a plugin dispatch callback, because retiring
+        the old manager waits for in-flight callbacks to drain.
+        """
+
+        from .plugins import LoadResult, PluginManager
+
+        if plugin_folder is None:
+            plugin_folder = self._plugin_folders[0] if self._plugin_folders else "plugins"
+
+        async with self._reload_lock:
+            candidate = PluginManager()
+            result = None
+            try:
+                result = await asyncio.to_thread(
+                    candidate.load_plugins,
+                    plugin_folder,
+                )
+                if result.failed:
+                    await candidate.shutdown()
+                    self._last_load_result = result
+                    return result
+                await asyncio.to_thread(
+                    candidate.setup_client,
+                    self,
+                    activate=False,
+                )
+            except Exception as exc:
+                try:
+                    await candidate.shutdown()
+                except Exception:
+                    pass
+                result = result or LoadResult()
+                result.failed.append(f"{type(exc).__name__}: {exc}")
+                self._last_load_result = result
+                return result
+
+            old_manager = None
+            try:
+                old_manager = self.swap_plugin_manager(
+                    candidate,
+                    expected=self.plugin_manager,
+                )
+            except Exception as exc:
+                try:
+                    await candidate.shutdown()
+                except Exception:
+                    pass
+                result.failed.append(f"{type(exc).__name__}: {exc}")
+                self._last_load_result = result
+                return result
+
+            self._last_load_result = result
+            self._disabled_plugins = _scan_disabled_plugins(plugin_folder)
+            errors: list[str] = []
+            if old_manager is not None:
+                report = await old_manager.shutdown()
+                errors.extend(report.errors)
+            if self._last_listener_start is not None:
+                await self._replay_last_listener_start()
+            if errors:
+                result.failed.extend(errors)
+            return result
+
+    async def set_plugin_enabled(
+        self,
+        plugin_name: str,
+        *,
+        enabled: bool,
+        plugin_folder: str | Path | None = None,
+    ):
+        """Enable or disable one plugin path and reload the plugin generation."""
+
+        from .plugins import LoadResult
+
+        if plugin_folder is None:
+            plugin_folder = self._plugin_folders[0] if self._plugin_folders else "plugins"
+        folder = Path(plugin_folder).resolve()
+        requested = str(plugin_name or "").strip()
+        if not requested or requested in {".", ".."}:
+            result = LoadResult()
+            result.failed.append("plugin name is empty")
+            return result
+        if Path(requested).name != requested:
+            result = LoadResult()
+            result.failed.append(f"invalid plugin name: {requested}")
+            return result
+
+        base = requested[2:] if requested.startswith("d_") else requested
+        enabled_path = _find_plugin_path(folder, base)
+        disabled_path = _find_plugin_path(folder, f"d_{base}")
+        source = disabled_path if enabled else enabled_path
+        target = enabled_path if enabled else disabled_path
+        if source is None:
+            result = LoadResult()
+            result.failed.append(f"找不到插件 {base}。")
+            return result
+
+        changed = False
+        if target is None:
+            target = source.with_name(
+                source.name[2:] if enabled else f"d_{source.name}"
+            )
+            try:
+                await asyncio.to_thread(source.rename, target)
+                changed = True
+            except OSError as exc:
+                result = LoadResult()
+                result.failed.append(f"{type(exc).__name__}: {exc}")
+                return result
+
+        result = await self.reload_plugins(plugin_folder)
+        result.changed = changed
+        if result.failed and changed:
+            try:
+                await asyncio.to_thread(target.rename, source)
+            except OSError:
+                pass
+        return result
+
+    async def _replay_last_listener_start(self) -> None:
+        if self._last_listener_start is None:
+            return
+        event, actions = self._last_listener_start
+        await self.distributor(event, actions)
 
     def swap_plugin_manager(self, new_manager, *, expected):
         """Atomically activate a staged manager and retire the expected manager."""
@@ -436,3 +630,25 @@ class Client:
             self._owner_inflight.pop(manager_id, None)
             self._owner_drained.pop(manager_id, None)
         return removed
+
+
+def _scan_disabled_plugins(plugin_folder: str | Path) -> list[str]:
+    folder = Path(plugin_folder)
+    if not folder.exists():
+        return []
+    return sorted(
+        entry.name[2:]
+        for entry in folder.iterdir()
+        if entry.name.startswith("d_")
+    )
+
+
+def _find_plugin_path(folder: Path, name: str) -> Path | None:
+    for candidate in (
+        folder / name,
+        folder / f"{name}.py",
+        folder / f"{name}.pyw",
+    ):
+        if candidate.exists() and candidate.parent.resolve() == folder:
+            return candidate
+    return None

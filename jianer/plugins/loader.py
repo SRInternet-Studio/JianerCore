@@ -17,6 +17,7 @@ existing plugin ecosystem.
 from __future__ import annotations
 
 import importlib.util
+from importlib.machinery import SourceFileLoader
 import sys
 import traceback
 import uuid
@@ -177,7 +178,17 @@ def _load_single(
 
     unique_module_name = f"{module_name}_{uuid.uuid4().hex}"
     try:
-        spec = importlib.util.spec_from_file_location(unique_module_name, entry_path)
+        if entry_path.suffix == ".pyw":
+            loader = SourceFileLoader(unique_module_name, str(entry_path))
+            spec = importlib.util.spec_from_loader(
+                unique_module_name,
+                loader,
+            )
+        else:
+            spec = importlib.util.spec_from_file_location(
+                unique_module_name,
+                entry_path,
+            )
         if spec is None or spec.loader is None:
             result.failed.append(f"{module_name} (入口错误: 无法创建导入规范)")
             return

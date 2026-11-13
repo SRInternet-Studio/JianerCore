@@ -2,6 +2,19 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
+from cfgr.manager import Serializers
+
+from jianer import configurator
+
+try:
+    configurator.BotConfig.get("jianer-bot")
+except KeyError:
+    configurator.BotConfig.load_from(
+        str(Path.cwd() / "config.json"),
+        Serializers.JSON,
+        "jianer-bot",
+    )
+
 from jianer.plugins import PluginManager
 
 

@@ -193,10 +193,23 @@ def dynamic_load(target: Path, report: Report, plugins_dir: Path | None) -> None
     if report.plugin_id is None or report.errors:
         return
     try:
+        from cfgr.manager import Serializers
+        from jianer import configurator
         from jianer.plugins import PluginManager
     except Exception as exc:
         report.errors.append(f"cannot import jianer.plugins for load check: {exc}")
         return
+
+    try:
+        configurator.BotConfig.get("jianer-bot")
+    except KeyError:
+        config_path = Path.cwd() / "config.json"
+        if config_path.is_file():
+            configurator.BotConfig.load_from(
+                str(config_path),
+                Serializers.JSON,
+                "jianer-bot",
+            )
 
     manager = PluginManager()
     if plugins_dir is None:

@@ -3,6 +3,10 @@
 本文记录 JianerCore 0.92 的宿主接线方式，以及插件可以依赖的跨适配器公共类型。
 这些接口主要用于需要观察消息、参与宿主 fallback、解析引用或安全读取媒体的插件。
 
+> 0.93.0 起，`Target`、`Receipt`、`UniMessage` 位于 `jianer.unimessage`，
+> 原 `jianer.plugins.builtin.alconna` 导入路径继续兼容。插件管理命令由内核
+> 提供，宿主通过 `Client.dispatch_core_commands()` 在普通插件之后调用。
+
 ## 迁移摘要
 
 0.92 对公开 ID 边界做了统一：
@@ -136,6 +140,34 @@ async def reload_plugins(client, current_manager, reload_lock):
 
 不要在运行时重载中调用 Alconna 的全局 `_clear_matchers()`，也不要按入口随机
 模块名清理 `sys.modules`。Matcher、订阅和模块均由各 Manager/插件代拥有。
+
+### 内核管理命令与公开 API
+
+0.93.0 提供以下内核命令，不需要另建插件：
+
+- `{reminder}重载插件`
+- `{reminder}禁用插件 <名称>`
+- `{reminder}启用插件 <名称>`
+- `{reminder}插件视角`
+
+宿主可以这样接线：
+
+```python
+client.configure_core_commands(
+    is_admin=lambda event: str(event.user_id) in admin_ids,
+    before_reload=release_active_pipeline,
+)
+handled = await client.dispatch_core_commands(
+    event,
+    actions,
+    message_text=text,
+)
+```
+
+`Client.reload_plugins()` 完成候选 Manager 的加载、原子交换、旧代关闭和最近一次
+`HyperListenerStartNotify` 重放；失败时保留旧 Manager。`Client.set_plugin_enabled()`
+负责 `d_` 前缀启停并在重载失败时回滚重命名。`Client.last_load_result` 和
+`Client.disabled_plugins()` 可供宿主展示状态。
 
 ## 会话键
 
